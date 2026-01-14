@@ -1,6 +1,8 @@
 # Virtual environment
 .venv/
 
+
+
 # Python cache
 __pycache__/
 *.pyc
@@ -14,6 +16,11 @@ __pycache__/
 *.tsv
 *.mat
 *.h5
+
+# Data directories
+data/data
+data/et_data/
+data/training_data/
 
 # OS files
 .DS_Store
