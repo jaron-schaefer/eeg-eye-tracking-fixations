@@ -7,6 +7,7 @@ import math
 
 from tqdm import tqdm
 from data.data_configs import *
+from data.data_utils import transform_et_time_to_eeg_time
 
 
 def add_stimulus_coords(df):
@@ -197,9 +198,6 @@ def get_stimuli_for_subject(subject_dir, extension=".jpg.txt"):
     stimuli.sort()  # optional, to keep consistent order
     return stimuli
 
-def tansform_to_eeg_time(time_stamp, b):
-    return (time_stamp - b)/1000
-
 
 def make_labeled_event_df(subjects: List[str]):
     for subject in tqdm(subjects):
@@ -238,7 +236,8 @@ def make_labeled_event_df(subjects: List[str]):
         # get and apply time difference parameter b for the subject
         df_time_synch = pd.read_excel(TIME_SYNCH_PATH, engine="openpyxl")
         b_test_subj = df_time_synch.loc[df_time_synch['Participant No.'] == subject, 'b'].values[0]
-        subject_df["eeg_time_start"] = subject_df["start_time"].apply(lambda x: tansform_to_eeg_time(x, b_test_subj))
+        subject_df["eeg_time_start"] = subject_df["start_time"].apply(lambda x: transform_et_time_to_eeg_time(x, b_test_subj))
+        subject_df["eeg_end_start"] = subject_df["end_time"].apply(lambda x: transform_et_time_to_eeg_time(x, b_test_subj))
 
         # Save subject DF
         save_path = os.path.join(LABELED_ET_DATA_DIR, f"{subject}_labeled_events.csv")
@@ -246,4 +245,4 @@ def make_labeled_event_df(subjects: List[str]):
         print(f"Saved labeled event DF for subject {subject} at {save_path}")
 
 if __name__ == "__main__":
-    make_labeled_event_df(ALL_SUBJECTS[31:])
+    make_labeled_event_df(ALL_SUBJECTS[30:31])
