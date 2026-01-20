@@ -1,6 +1,6 @@
 # Virtual environment
-.venv/
-
+.eye_eeg_venv
+.vscode
 
 
 # Python cache
@@ -10,17 +10,9 @@ __pycache__/
 # Jupyter notebook checkpoints
 .ipynb_checkpoints/
 
-# Data files
-*.edf
-*.csv
-*.tsv
-*.mat
-*.h5
-
 # Data directories
-data/data
-data/et_data/
-data/training_data/
+data/data/raw_data
+
 
 # OS files
 .DS_Store

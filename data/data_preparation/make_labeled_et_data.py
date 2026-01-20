@@ -10,6 +10,18 @@ from data.data_configs import *
 from data.data_utils import transform_et_time_to_eeg_time
 
 
+def eye_valid(x, y, conf, w=SCREEN_WIDTH, h=SCREEN_HEIGHT):
+    if pd.isna(x) or pd.isna(y):
+        return False
+    if x == -1 or y == -1:
+        return False
+    if not (0 <= x <= w and 0 <= y <= h):
+        return False
+    if conf < 1:
+        return False
+    return True
+
+
 def add_stimulus_coords(df):
 
     # top-left corner of stimulus in screen coordinates
@@ -26,27 +38,76 @@ def add_stimulus_coords(df):
 
     return df
 
+def validity_reason(x, y, conf, w=SCREEN_WIDTH, h=SCREEN_HEIGHT):
+    reasons = []
+    if pd.isna(x) or pd.isna(y):
+        reasons.append("NaN")
+    if x == -1 or y == -1:
+        reasons.append("Missing (-1)")
+    if not (0 <= x <= w and 0 <= y <= h):
+        reasons.append("Off-screen")
+    if conf < 1:
+        reasons.append("Low confidence")
+    return ", ".join(reasons) if reasons else "Unknown"
+
+
+
+def combine_gaze(row, disparity_thresh=80, debug=False):
+
+    L_valid = eye_valid(row['stim_L_x'], row['stim_L_y'], row['Pupil Confidence'])
+    R_valid = eye_valid(row['stim_R_x'], row['stim_R_y'], row['Pupil Confidence'])
+
+    if L_valid and R_valid:
+        dx = row['stim_L_x'] - row['stim_R_x']
+        dy = row['stim_L_y'] - row['stim_R_y']
+
+        if np.sqrt(dx*dx + dy*dy) > disparity_thresh:
+            return pd.Series([np.nan, np.nan])
+
+        return pd.Series([
+            (row['stim_L_x'] + row['stim_R_x']) / 2,
+            (row['stim_L_y'] + row['stim_R_y']) / 2
+        ])
+
+    elif L_valid:
+        return pd.Series([row['stim_L_x'], row['stim_L_y']])
+
+    elif R_valid:
+        return pd.Series([row['stim_R_x'], row['stim_R_y']])
+
+    else:
+        if debug:
+            raise ValueError(
+                f"Invalid binocular sample at Time={row['Time']}. "
+                f"Left eye: {validity_reason(row['stim_L_x'], row['stim_L_y'], row['Pupil Confidence'])}. "
+                f"Right eye: {validity_reason(row['stim_R_x'], row['stim_R_y'], row['Pupil Confidence'])}."
+            )
+        return pd.Series([np.nan, np.nan])
+
 def combine_events_both_eyes(df):
-        # Define combined event based on both eyes
+
     def combined_event(row):
-        if 'Fixation' in [row['L Event Info'], row['R Event Info']]:
+        if pd.isna(row['mean_x']) or pd.isna(row['mean_y']):
+            return 'Blink'
+
+        L = row['L Event Info']
+        R = row['R Event Info']
+
+        if L == 'Fixation' and R == 'Fixation':
             return 'Fixation'
-        elif 'Saccade' in [row['L Event Info'], row['R Event Info']]:
+        elif L == 'Saccade' and R == 'Saccade':
             return 'Saccade'
         else:
             return 'Blink'
 
+    df[['mean_x', 'mean_y']] = df.apply(
+        combine_gaze, axis=1, result_type='expand'
+    )
+
     df['event'] = df.apply(combined_event, axis=1)
 
-    # Check that no row has None as event
-    if df['event'].isnull().any():
-        raise ValueError("Some rows have undefined event (None). Check your data.")
-
-    # Average coordinates for both eyes
-    df['mean_x'] = df[['stim_L_x', 'stim_R_x']].mean(axis=1, skipna=True)
-    df['mean_y'] = df[['stim_L_y', 'stim_R_y']].mean(axis=1, skipna=True)
-
     return df
+
 
 def make_event_df(df):
     # Add a dummy row at the end with a different event type

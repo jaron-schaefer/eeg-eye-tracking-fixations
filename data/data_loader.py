@@ -1,19 +1,93 @@
-"""
-Utilities for loading and processing EEG data from NPZ files with proper channel mapping.
-"""
-
-import numpy as np
+import os
 import warnings
+import numpy as np
+from pathlib import Path
+import pandas as pd
+
+
 from typing import List, Optional, Sequence, Tuple, Union
 from sklearn.model_selection import train_test_split
 from tensorflow.keras import utils as np_utils
-from pathlib import Path
-import os
-from data.data_configs import EEG_CHANNEL_NAMES, DEFAULT_EEGNET_CHANNELS, LABELED_EEG_DATA_DIR
+from data.data_configs import EEG_CHANNEL_NAMES, DEFAULT_EEGNET_CHANNELS, LABELED_EEG_DATA_DIR, FEATURES_DIR, LABELED_ET_DATA_DIR
 
 
 class DataLoader:
 
+    @classmethod
+    def load_labeled_et_data(
+        cls,
+        subjects: Union[str, Sequence[str]],
+        et_data_dir: Path = LABELED_ET_DATA_DIR
+    ) -> pd.DataFrame:
+        """
+        Load labeled eyetracking data for one or more subjects from LABELED_ET_DATA_DIR.
+        Returns:
+            df: Single DataFrame with all data and a 'subject' column
+        """
+        subj_list = [subjects] if isinstance(subjects, str) else list(subjects)
+        df_list = []
+        for subj in subj_list:
+            et_path = Path(et_data_dir) / f"{subj}_labeled_events.csv"
+            df = pd.read_csv(et_path)
+            df = df[df["event_type"] == "Fixation"]
+            df['subject'] = subj
+            df_list.append(df)
+        big_df = pd.concat(df_list, ignore_index=True)
+        return big_df
+
+    @classmethod
+    def load_features(
+        cls,
+        subjects: Union[str, Sequence[str]],
+        mode: str = "advanced",
+        channels: List[str] = EEG_CHANNEL_NAMES
+    ) -> Tuple[np.ndarray, np.ndarray, List[str], List[str]]:
+        """
+        Load features (simple or advanced) for all or specified subjects.
+        Optionally select all columns for specified EEG channels (plus label).
+        Args:
+            subjects: subject(s) to load
+            mode: 'simple' or 'advanced'
+            features_dir: base directory for features
+            channels: list of EEG channel names to include (all columns containing the channel name)
+        Returns:
+            X: Feature matrix (samples, features)
+            y: Labels (samples,)
+            feature_names: List of feature column names
+            subject_list: List of subject IDs for each sample
+        """
+        import pandas as pd
+        from pathlib import Path
+        subj_list = [subjects] if isinstance(subjects, str) else list(subjects)
+        X_blocks = []
+        y_blocks = []
+        subject_ids = []
+        feature_names = None
+        for subj in subj_list:
+            feat_path = Path(FEATURES_DIR) / mode / subj / "features.csv"
+            df = pd.read_csv(feat_path)
+            if channels is not None:
+                # Select all columns where the channel name appears anywhere in the feature name (e.g., 'P7' in 'min_P7' or 'P7_min')
+                selected_cols = [col for col in df.columns if any((ch in col or col in ch) for ch in channels)]
+                # Always include label if present
+                if 'label' in df.columns and 'label' not in selected_cols:
+                    selected_cols.append('label')
+                df = df[selected_cols]
+            if 'label' in df.columns:
+                X = df.drop(columns=["label"]).values
+                y = df["label"].values
+                current_feature_names = list(df.drop(columns=["label"]).columns)
+
+            if feature_names is None:
+                feature_names = current_feature_names
+            X_blocks.append(X)
+            if y is not None:
+                y_blocks.append(y)
+            subject_ids.extend([subj] * len(X))
+        X_out = np.vstack(X_blocks)
+        y_out = np.concatenate(y_blocks) if y_blocks else None
+        return X_out, y_out, feature_names, subject_ids
+    
     @classmethod
     def load_subject_labeled_eeg(
         cls, 
@@ -49,7 +123,7 @@ class DataLoader:
         assert channels == channel_names
         return X, y, channel_names, metadata
 
-    
+
     @classmethod
     def load_labeled_eeg_data(
         cls,

@@ -6,7 +6,7 @@ DATA_ROOT = Path(__file__).resolve().parent / "data"
 LABELED_ET_DATA_DIR = DATA_ROOT / "labeled_et_data"
 LABELED_EEG_DATA_DIR = DATA_ROOT / "labeled_eeg_data"
 RAW_DATA_ROOT = DATA_ROOT / "raw_data"
-FEATURES_DIR = DATA_ROOT / "features_dir"
+FEATURES_DIR = DATA_ROOT / "features"
 
 ET_DIR = RAW_DATA_ROOT / "ET_clip"
 IMAGE_DIR = RAW_DATA_ROOT / "Stimuli"
@@ -65,11 +65,17 @@ ET_SUBJECTS = [
 # These subjects, have either misaligned data or very messy and flat EEG:
 # P02, P04, P06, P11, P14, P15, P23, P24, P25, P26, P29, P32, P33, P35, P37
 
+
+# P31 has to many invalid segments... missing data
+# Too many segments removed: 2172 >= 50 for subject:P31
+
+# P36 does not exist in the cleaned version
+
 SUBJECTS = [
     "P01", "P05", "P07", "P09", "P10",
     "P12", "P16", "P17", "P19", "P20",
-    "P21", "P27", "P28", "P30", "P31", 
-    "P34", "P36", "P38"
+    "P21", "P27", "P28", "P30", 
+    "P34", "P38"
 ]
 
 
