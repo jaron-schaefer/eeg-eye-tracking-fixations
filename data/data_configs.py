@@ -5,6 +5,10 @@ DATA_ROOT = Path(__file__).resolve().parent / "data"
 
 LABELED_ET_DATA_DIR = DATA_ROOT / "labeled_et_data"
 LABELED_EEG_DATA_DIR = DATA_ROOT / "labeled_eeg_data"
+
+LABELED_ET_ALL_DATA_DIR = LABELED_ET_DATA_DIR / "all"
+SELECTED_ET_DATA_DIR = LABELED_ET_DATA_DIR / "selected"
+
 RAW_DATA_ROOT = DATA_ROOT / "raw_data"
 FEATURES_DIR = DATA_ROOT / "features"
 
@@ -16,13 +20,22 @@ RAW_EEG_DIR = RAW_DATA_ROOT / "EEG"
 
 TIME_SYNCH_PATH = RAW_DATA_ROOT / "Time Synchronization Data.xlsx"
 
+# Ensure all directories exist
+for d in [
+    LABELED_ET_DATA_DIR, LABELED_EEG_DATA_DIR,
+    LABELED_ET_ALL_DATA_DIR, SELECTED_ET_DATA_DIR,
+    RAW_DATA_ROOT, FEATURES_DIR,
+    ET_DIR, IMAGE_DIR, LABELS_DIR, EEG_DIR, RAW_EEG_DIR
+]:
+    d.mkdir(parents=True, exist_ok=True)
+
 SCREEN_WIDTH = 1920
 SCREEN_HEIGHT = 1080
 
 STIM_WIDTH = 800
 STIM_HEIGHT = 800
 
-FIXATION_RADIUS = 50/2
+FIXATION_RADIUS = 50
 
 
 EEG_SAMPLE_FREQUENCY = 500
@@ -49,31 +62,10 @@ ALL_SUBJECTS = [
     "P31", "P32", "P33", "P34", "P35", "P36", "P37", "P38"
 ]
 
-# Subjects with good eyetracking data
-# Subjects that were removed:
-# More than 5% of trials didnt include fixations: 
-# 'P03', 'P04', 'P08', 'P13', 'P18', 'P22'
-ET_SUBJECTS = [
-    "P01", "P02", "P04", "P05", "P06", "P07", "P09", "P10",
-    "P11", "P12", "P14", "P15", "P16", "P17", "P19", "P20",
-    "P21", "P23", "P24", "P25", "P26", "P27", "P28", "P29", "P30",
-    "P31", "P32", "P33", "P34", "P35", "P36", "P37", "P38"
-]
-
-# Misaligned subjects: (P11, P15, P29) check again
-
-# These subjects, have either misaligned data or very messy and flat EEG:
-# P02, P04, P06, P11, P14, P15, P23, P24, P25, P26, P29, P32, P33, P35, P37
-
-
-# P31 has to many invalid segments... missing data
-# Too many segments removed: 2172 >= 50 for subject:P31
-
-# P36 does not exist in the cleaned version
 
 SUBJECTS = [
-    "P01", "P05", "P07", "P09", "P10",
-    "P12", "P16", "P17", "P19", "P20",
+    "P01", "P07", "P09", "P10",
+    "P16", "P17", "P20",
     "P21", "P27", "P28", "P30", 
     "P34", "P38"
 ]

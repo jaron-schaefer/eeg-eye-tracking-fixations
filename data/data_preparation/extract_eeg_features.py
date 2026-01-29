@@ -151,8 +151,3 @@ def extract_and_save_features_for_subjects(subjects: List[str] = SUBJECTS, chann
             df, labels, output_path = extract_and_save_subject_features(subject, channels, mode=mode)
         except Exception as e:
             print(f"  Error processing {subject}: {e}")
-
-
-
-if __name__ == "__main__":
-    extract_and_save_features_for_subjects(SUBJECTS[:], DEFAULT_EEGNET_CHANNELS, mode="advanced")

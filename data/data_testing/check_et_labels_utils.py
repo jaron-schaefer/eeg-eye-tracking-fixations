@@ -10,20 +10,23 @@ from PIL import Image
 from data.data_configs import (
     IMAGE_DIR,
     ET_DIR,
-    LABELED_ET_DATA_DIR,
+    LABELED_ET_ALL_DATA_DIR,
     COLUMN_NAMES,
     FIXATION_RADIUS,
+    SELECTED_ET_DATA_DIR,
+    SELECTED_ET_DATA_DIR,
 )
-from data.data_preparation.make_labeled_et_data import (
-    combine_events_both_eyes,
+from data.data_preparation.label_et_data import (
+    combine_gaze_with_event,
     add_stimulus_coords,
     get_plane_boxes,
 )
 
 
-def load_events(subject: str) -> pd.DataFrame:
+def load_events(subject: str, selected: bool = False) -> pd.DataFrame:
     """Load labeled events CSV for a given subject."""
-    path = os.path.join(LABELED_ET_DATA_DIR, f"{subject}_labeled_events.csv")
+    dir_path = LABELED_ET_ALL_DATA_DIR if not selected else SELECTED_ET_DATA_DIR
+    path = os.path.join(dir_path, f"{subject}_labeled_events.csv")
     if not os.path.exists(path):
         raise FileNotFoundError(f"Labeled events file not found: {path}")
     return pd.read_csv(path, dtype={"stimulus": str})
@@ -69,14 +72,27 @@ def get_et_data_path(subject: str, stimulus: str) -> str:
 
 
 def load_raw_et_df(subject: str, stimulus: str) -> pd.DataFrame:
-    """Load raw ET data, add stimulus coordinates and combine events across eyes."""
+    """
+    Load raw ET data for a given subject and stimulus,
+    add stimulus coordinates, and compute combined gaze and event labels.
+    """
     et_path = get_et_data_path(subject, stimulus)
     if not os.path.exists(et_path):
         raise FileNotFoundError(f"ET data not found: {et_path}")
-    raw_df = pd.read_csv(et_path, comment='#', names=COLUMN_NAMES)
+
+    # Load raw ET data
+    raw_df = pd.read_csv(et_path, comment='#', names=COLUMN_NAMES, low_memory=False)
+
+    # Add coordinates relative to stimulus center
     raw_df = add_stimulus_coords(raw_df.copy())
-    raw_df = combine_events_both_eyes(raw_df.copy())
+
+    # Apply combined gaze and event labeling row-wise
+    raw_df[['mean_x', 'mean_y', 'event']] = raw_df.apply(combine_gaze_with_event, axis=1, result_type='expand')
+
+    raw_df.to_csv("debug_raw_et.csv", index=False)  # Debugging line
+
     return raw_df
+
 
 
 def plot_gaze(df: pd.DataFrame, image_path: str, size=(8, 6), alpha=0.6, point_size=10):
@@ -85,11 +101,12 @@ def plot_gaze(df: pd.DataFrame, image_path: str, size=(8, 6), alpha=0.6, point_s
     img_width, img_height = img.size
 
     plt.figure(figsize=size)
+    # the image needs to be turned around so it mateches the usualy top left origin of the eye tracking and boxes
     plt.imshow(img, extent=[0, img_width, img_height, 0])
     plt.scatter(df['mean_x'], df['mean_y'], alpha=alpha, s=point_size, c='red')
 
-    plt.ylim(-200, 900)
-    plt.xlim(-200, 900)
+    plt.xlim(-100, 900)
+    plt.ylim(-100, 900)
     plt.xlabel("X [px]")
     plt.ylabel("Y [px]")
     plt.title("Gaze on Stimulus")
@@ -169,7 +186,8 @@ def plot_stimulus_for_subject(
     subject: str,
     also_gaze: bool = False,
     stimulus: Optional[str] = None,
-    seed: Optional[int] = None
+    seed: Optional[int] = None,
+    selected = False
 ):
     """Plot labeled events (and optionally gaze) for a subject.
 
@@ -177,7 +195,7 @@ def plot_stimulus_for_subject(
     labeled events and the subject's ET clips). Otherwise, pick a random
     available stimulus for the subject and print which one was chosen.
     """
-    events = load_events(subject)
+    events = load_events(subject, selected=selected)
 
     if stimulus is None:
         stim = pick_random_stimulus(events, subject, seed=seed)
@@ -204,6 +222,8 @@ def plot_stimulus_for_subject(
     image_path = get_image_path(stim)
     plane_boxes = get_plane_boxes(stim)
     events_for_stim = events[events["stimulus"] == stim]
+
+    events_for_stim.to_csv("debug_raw.csv", index=False) 
 
     plot_events_on_image(events_for_stim, image_path, plane_boxes)
 

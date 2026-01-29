@@ -1,5 +1,6 @@
 import os
 import warnings
+import mne
 import numpy as np
 from pathlib import Path
 import pandas as pd
@@ -7,11 +8,30 @@ import pandas as pd
 
 from typing import List, Optional, Sequence, Tuple, Union
 from sklearn.model_selection import train_test_split
-from tensorflow.keras import utils as np_utils
-from data.data_configs import EEG_CHANNEL_NAMES, DEFAULT_EEGNET_CHANNELS, LABELED_EEG_DATA_DIR, FEATURES_DIR, LABELED_ET_DATA_DIR
+from data.data_configs import *
 
 
 class DataLoader:
+
+    @classmethod
+    def load_eeg(cls, subject: str, eeg_dir=EEG_DIR):
+        path = os.path.join(eeg_dir, f"{subject}.edf")
+        raw = mne.io.read_raw_edf(path, preload=True, verbose=False)
+
+        actual = [ch for ch in raw.ch_names if ch != "Status"]
+        expected = EEG_CHANNEL_NAMES
+        missing = [ch for ch in expected if ch not in actual]
+        extra = [ch for ch in actual if ch not in expected]
+        if missing or extra:
+            raise ValueError(
+                f"Channel set mismatch for {subject}!\nMissing: {missing}\nExtra: {extra}\n"
+                f"Expected ({len(expected)}): {expected}\nActual ({len(actual)}): {actual}"
+            )
+
+        picks = [raw.ch_names.index(ch) for ch in expected]
+        data, times = raw.get_data(picks=picks, return_times=True)
+        data = data * 1e6  # V -> μV conversion
+        return raw, data, times, list(expected)
 
     @classmethod
     def load_labeled_et_data(
@@ -42,22 +62,7 @@ class DataLoader:
         mode: str = "advanced",
         channels: List[str] = EEG_CHANNEL_NAMES
     ) -> Tuple[np.ndarray, np.ndarray, List[str], List[str]]:
-        """
-        Load features (simple or advanced) for all or specified subjects.
-        Optionally select all columns for specified EEG channels (plus label).
-        Args:
-            subjects: subject(s) to load
-            mode: 'simple' or 'advanced'
-            features_dir: base directory for features
-            channels: list of EEG channel names to include (all columns containing the channel name)
-        Returns:
-            X: Feature matrix (samples, features)
-            y: Labels (samples,)
-            feature_names: List of feature column names
-            subject_list: List of subject IDs for each sample
-        """
-        import pandas as pd
-        from pathlib import Path
+
         subj_list = [subjects] if isinstance(subjects, str) else list(subjects)
         X_blocks = []
         y_blocks = []
@@ -88,13 +93,66 @@ class DataLoader:
         y_out = np.concatenate(y_blocks) if y_blocks else None
         return X_out, y_out, feature_names, subject_ids
     
+    
+    @classmethod
+    def load_et_features(
+        cls,
+        subjects: Union[str, Sequence[str]],
+    ) -> Tuple[np.ndarray, np.ndarray, List[str], List[str]]:
+
+        subj_list = [subjects] if isinstance(subjects, str) else list(subjects)
+        X_blocks = []
+        y_blocks = []
+        subject_ids = []
+        feature_names = None
+        
+        for subj in subj_list:
+            feat_path = Path(FEATURES_DIR) / "et_features" / f"{subj}_features.csv"
+            
+            if not feat_path.exists():
+                print(f"Warning: Feature file not found for {subj}: {feat_path}")
+                continue
+                
+            df = pd.read_csv(feat_path)
+            
+            # Define columns to exclude from features (metadata and label)
+            exclude_cols = ['subject', 'stimulus', 'fixation_on_airplane']
+            
+            if 'fixation_on_airplane' in df.columns:
+                y = df['fixation_on_airplane'].values
+            else:
+                raise ValueError(f"No 'fixation_on_airplane' column found in {feat_path}")
+            
+            # Get feature columns (exclude metadata and label)
+            feature_cols = [col for col in df.columns if col not in exclude_cols]
+            X = df[feature_cols].values
+            
+            # Store feature names from first subject
+            if feature_names is None:
+                feature_names = feature_cols
+            elif feature_cols != feature_names:
+                print(f"Warning: Feature mismatch for {subj}. Expected {len(feature_names)}, got {len(feature_cols)}")
+            
+            X_blocks.append(X)
+            y_blocks.append(y)
+            subject_ids.extend([subj] * len(X))
+        
+        if not X_blocks:
+            raise ValueError(f"No features loaded for subjects: {subj_list}")
+        
+        X_out = np.vstack(X_blocks)
+        y_out = np.concatenate(y_blocks)
+    
+        return X_out, y_out, feature_names, subject_ids
+    
+
     @classmethod
     def load_subject_labeled_eeg(
         cls, 
         subject: str, 
         channels: List[str] = EEG_CHANNEL_NAMES,
-        pre_window_ms: int = 500, 
-        post_window_ms: int = 500
+        pre_window_ms: int = 1000, 
+        post_window_ms: int = 1000
     ) -> Tuple[np.ndarray, np.ndarray, List[str], dict]:
         
         path = LABELED_EEG_DATA_DIR / subject / f"{pre_window_ms}_{post_window_ms}_training_data.npz"
@@ -129,8 +187,8 @@ class DataLoader:
         cls,
         subjects: Union[str, Sequence[str]],
         channels: Optional[Union[str, Sequence[str]]] = EEG_CHANNEL_NAMES,
-        pre_window_ms: int = 500,
-        post_window_ms: int = 500,
+        pre_window_ms: int = 1000,
+        post_window_ms: int = 1000,
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         # Normalize single subject or channel to list
         subject_list = [subjects] if isinstance(subjects, str) else list(subjects)
@@ -138,6 +196,7 @@ class DataLoader:
 
         X_blocks: List[np.ndarray] = []
         y_blocks: List[np.ndarray] = []
+        subject_ids: List[str] = []
         time_axis: Optional[np.ndarray] = None
         selected_names_ref: Optional[List[str]] = None
 
@@ -157,6 +216,7 @@ class DataLoader:
 
             X_blocks.append(X)
             y_blocks.append(y)
+            subject_ids.extend([subj] * len(X))
 
             # Capture and check consistent time axis
             if time_axis is None:
@@ -169,97 +229,103 @@ class DataLoader:
         X_out = np.concatenate(X_blocks, axis=0)
         y_out = np.concatenate(y_blocks, axis=0)
 
-        return X_out, y_out, time_axis
-
-    def load_segment_time_axis(
-        self, subject: str, pre_window_ms: int = 500, post_window_ms: int = 500
-    ) -> np.ndarray:
-        """
-        Load the common per-segment time vector from the subject NPZ.
-
-        Returns a 1D array aligned to the segment window, typically
-        spanning [-pre_s, ..., +post_s) with sampling based on the stored rate.
-        """
-        path = LABELED_EEG_DATA_DIR / subject / f"{pre_window_ms}_{post_window_ms}_training_data.npz"
-        data = np.load(str(path))
-        if "time" not in data.files:
-            raise KeyError("'time' not found in NPZ for subject. Regenerate data to include time axis.")
-        return data["time"]
-
-
-
-
-# Backward compatible module-level wrappers (used by older code paths)
-def load_training_data(subject: str, pre_window_ms: int = 500, post_window_ms: int = 500):
-    dl = DataLoader()
-    return dl._load_subject_labeled_eeg(subject, pre_window_ms, post_window_ms)
-
-
-def select_channels_by_name(X, available_channels, desired_channels):
-    dl = DataLoader()
-    return dl.select_channels_by_name(X, available_channels, desired_channels)
+        return X_out, y_out, time_axis, np.array(subject_ids)
 
 
 
 
 
-def prepare_data_for_eegnet(X, y, test_size=0.3, val_size=0.5, random_state=42):
+
+
+#     def load_segment_time_axis(
+#         self, subject: str, pre_window_ms: int = 500, post_window_ms: int = 500
+#     ) -> np.ndarray:
+#         """
+#         Load the common per-segment time vector from the subject NPZ.
+
+#         Returns a 1D array aligned to the segment window, typically
+#         spanning [-pre_s, ..., +post_s) with sampling based on the stored rate.
+#         """
+#         path = LABELED_EEG_DATA_DIR / subject / f"{pre_window_ms}_{post_window_ms}_training_data.npz"
+#         data = np.load(str(path))
+#         if "time" not in data.files:
+#             raise KeyError("'time' not found in NPZ for subject. Regenerate data to include time axis.")
+#         return data["time"]
+
+
+
+
+# # Backward compatible module-level wrappers (used by older code paths)
+# def load_training_data(subject: str, pre_window_ms: int = 500, post_window_ms: int = 500):
+#     dl = DataLoader()
+#     return dl._load_subject_labeled_eeg(subject, pre_window_ms, post_window_ms)
+
+
+# def select_channels_by_name(X, available_channels, desired_channels):
+#     dl = DataLoader()
+#     return dl.select_channels_by_name(X, available_channels, desired_channels)
+
+
+
+
+
+# def prepare_data_for_eegnet(X, y, test_size=0.3, val_size=0.5, random_state=42):
     
-    # Add kernel dimension for EEGNet (channels_last format)
-    X = X.reshape(X.shape[0], X.shape[1], X.shape[2], 1)
+#     # Add kernel dimension for EEGNet (channels_last format)
+#     X = X.reshape(X.shape[0], X.shape[1], X.shape[2], 1)
     
-    # First split: train+val vs test
-    X_temp, X_test, y_temp, y_test = train_test_split(
-        X, y, test_size=test_size, shuffle=True, stratify=y, random_state=random_state
-    )
+#     # First split: train+val vs test
+#     X_temp, X_test, y_temp, y_test = train_test_split(
+#         X, y, test_size=test_size, shuffle=True, stratify=y, random_state=random_state
+#     )
     
-    # Second split: train vs val
-    X_train, X_val, y_train, y_val = train_test_split(
-        X_temp, y_temp, test_size=val_size, shuffle=True, stratify=y_temp, random_state=random_state
-    )
+#     # Second split: train vs val
+#     X_train, X_val, y_train, y_val = train_test_split(
+#         X_temp, y_temp, test_size=val_size, shuffle=True, stratify=y_temp, random_state=random_state
+#     )
     
-    # Convert labels to categorical (one-hot encoding)
-    n_classes = len(np.unique(y))
-    y_train = np_utils.to_categorical(y_train.astype(int), num_classes=n_classes)
-    y_val = np_utils.to_categorical(y_val.astype(int), num_classes=n_classes)
-    y_test = np_utils.to_categorical(y_test.astype(int), num_classes=n_classes)
+#     # Convert labels to categorical (one-hot encoding)
+#     n_classes = len(np.unique(y))
+#     y_train = np_utils.to_categorical(y_train.astype(int), num_classes=n_classes)
+#     y_val = np_utils.to_categorical(y_val.astype(int), num_classes=n_classes)
+#     y_test = np_utils.to_categorical(y_test.astype(int), num_classes=n_classes)
     
-    return X_train, X_val, X_test, y_train, y_val, y_test
+#     return X_train, X_val, X_test, y_train, y_val, y_test
 
-def load_and_prepare_eegnet_data(subject, desired_channels=None, **kwargs):
+# def load_and_prepare_eegnet_data(subject, desired_channels=None, **kwargs):
     
-    if desired_channels is None:
-        desired_channels = DEFAULT_EEGNET_CHANNELS
+#     if desired_channels is None:
+#         desired_channels = DEFAULT_EEGNET_CHANNELS
     
-    # Load raw data via DataLoader for backward compatibility
-    dl = DataLoader()
-    X, y, channel_names, _metadata = dl._load_subject_labeled_eeg(subject, 500, 500)
+#     # Load raw data via DataLoader for backward compatibility
+#     dl = DataLoader()
+#     X, y, channel_names, _metadata = dl._load_subject_labeled_eeg(subject, 500, 500)
     
-    # Select desired channels
-    X_selected, _idx, selected_channels = dl.select_channels_by_name(
-        X, channel_names, desired_channels
-    )
+#     # Select desired channels
+#     X_selected, _idx, selected_channels = dl.select_channels_by_name(
+#         X, channel_names, desired_channels
+#     )
     
-    # Prepare for EEGNet
-    X_train, X_val, X_test, y_train, y_val, y_test = prepare_data_for_eegnet(
-        X_selected, y, **kwargs
-    )
+#     # Prepare for EEGNet
+#     X_train, X_val, X_test, y_train, y_val, y_test = prepare_data_for_eegnet(
+#         X_selected, y, **kwargs
+#     )
     
-    return X_train, X_val, X_test, y_train, y_val, y_test, selected_channels
+#     return X_train, X_val, X_test, y_train, y_val, y_test, selected_channels
 
-def get_channel_info(subject):
-    """
-    Quick function to check what channels are available for a subject.
-    """
-    try:
-        dl = DataLoader()
-        X, y, channel_names, metadata = dl._load_subject_labeled_eeg(subject, 500, 500)
-        print(f"\nSubject {subject} channel info:")
-        print(f"Available channels ({len(channel_names)}): {channel_names}")
-        print(f"Data shape: {X.shape}")
-        print(f"Available in DEFAULT_EEGNET_CHANNELS: {[ch for ch in DEFAULT_EEGNET_CHANNELS if ch in channel_names]}")
-        print(f"Missing from DEFAULT_EEGNET_CHANNELS: {[ch for ch in DEFAULT_EEGNET_CHANNELS if ch not in channel_names]}")
-        return channel_names
-    except FileNotFoundError:
-        print(f"No training data found for {subject}")
-        return None
+# def get_channel_info(subject):
+#     """
+#     Quick function to check what channels are available for a subject.
+#     """
+#     try:
+#         dl = DataLoader()
+#         X, y, channel_names, metadata = dl._load_subject_labeled_eeg(subject, 500, 500)
+#         print(f"\nSubject {subject} channel info:")
+#         print(f"Available channels ({len(channel_names)}): {channel_names}")
+#         print(f"Data shape: {X.shape}")
+#         print(f"Available in DEFAULT_EEGNET_CHANNELS: {[ch for ch in DEFAULT_EEGNET_CHANNELS if ch in channel_names]}")
+#         print(f"Missing from DEFAULT_EEGNET_CHANNELS: {[ch for ch in DEFAULT_EEGNET_CHANNELS if ch not in channel_names]}")
+#         return channel_names
+#     except FileNotFoundError:
+#         print(f"No training data found for {subject}")
+#         return None
