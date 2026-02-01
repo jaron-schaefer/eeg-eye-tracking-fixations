@@ -167,6 +167,7 @@ def select_et_trials(subjects=ALL_SUBJECTS):
             (fixation_summary_all["stimulus"].astype(str).isin(selected_stimuli))
         ]
         filtered_fixation_summary.append(filtered)
+        
     if filtered_fixation_summary:
         filtered_df = pd.concat(filtered_fixation_summary, ignore_index=True)
         filtered_df.to_csv(

@@ -1,3 +1,8 @@
+# =============================================================================
+# NOTE: EEG data is stored in volts in the raw files, but when loaded using
+# DataLoader (load_eeg or load_subject_labeled_eeg), it is converted to microvolts (μV).
+# All processing and feature extraction in this script assumes data is in microvolts.
+# =============================================================================
 import os
 import mne
 import pandas as pd
@@ -21,6 +26,7 @@ def epoch_fixations(data: np.ndarray, times: np.ndarray, fix_df: pd.DataFrame, p
     times_ms = transform_eeg_time_to_ms(times)
     X_segments: list[np.ndarray] = []
     y: list[int] = []
+    stimulus_summary: list[str] = []
     for _, row in fix_df.iterrows():
         fix_ms = row["eeg_time_start"]
         label = row["fixation_on_airplane"]
@@ -28,10 +34,11 @@ def epoch_fixations(data: np.ndarray, times: np.ndarray, fix_df: pd.DataFrame, p
         i1 = min(data.shape[1], np.searchsorted(times_ms, fix_ms + post_ms))
         X_segments.append(data[:, i0:i1])
         y.append(label)
-    return X_segments, y
+        stimulus_summary.append(row["stimulus_summary"])
+    return X_segments, y, stimulus_summary
 
 
-def filter_segments(segments: list[np.ndarray], labels: list[int], n_channels: int, expected_samples: int, subject: str, max_removed: int = 50):
+def filter_segments(segments: list[np.ndarray], labels: list[int], stimulus_summary: list[str], n_channels: int, expected_samples: int, subject: str, max_removed: int = 50):
     keep = [i for i, seg in enumerate(segments) if seg.shape == (n_channels, expected_samples)]
     removed = len(segments) - len(keep)
     if removed >= max_removed:
@@ -39,8 +46,8 @@ def filter_segments(segments: list[np.ndarray], labels: list[int], n_channels: i
     if removed:
         segments = [segments[i] for i in keep]
         labels = [labels[i] for i in keep]
-    return np.array(segments), np.array(labels), removed
-
+        stimulus_summary = [stimulus_summary[i] for i in keep]
+    return np.array(segments), np.array(labels), np.array(stimulus_summary), removed
 
 def baseline_correct(segments: np.ndarray, fs: float, pre_ms: int, baseline_start_ms: int = -300, baseline_end_ms: int = 0):
     start_idx = int((baseline_start_ms + pre_ms) * fs / 1000)
@@ -52,13 +59,16 @@ def baseline_correct(segments: np.ndarray, fs: float, pre_ms: int, baseline_star
     return corrected
 
 
-def save_training_npz(subject: str, pre_ms: int, post_ms: int, X: np.ndarray, y: np.ndarray, channel_names: list[str], sampling_rate: float, time_axis_ms: np.ndarray):
+def save_training_npz(subject: str, pre_ms: int, post_ms: int,
+                       X: np.ndarray, y: np.ndarray, stimulus_summary: np.ndarray, 
+                       channel_names: list[str], sampling_rate: float, time_axis_ms: np.ndarray):
     sub_dir = os.path.join(LABELED_EEG_DATA_DIR, subject)
     os.makedirs(sub_dir, exist_ok=True)
     np.savez_compressed(
         os.path.join(sub_dir, f"{pre_ms}_{post_ms}_training_data.npz"),
         X=X,
         y=y,
+        stimulus_summary=stimulus_summary,
         time=time_axis_ms,
         channel_names=channel_names,
         sampling_rate=sampling_rate,
@@ -67,15 +77,15 @@ def save_training_npz(subject: str, pre_ms: int, post_ms: int, X: np.ndarray, y:
     )
 
 
-def label_eeg_data(pre_window_ms: int = 500, post_window_ms: int = 1000, subjects: list[str] = SUBJECTS):
+def label_eeg_data(pre_window_ms: int = PRE_WINDOW_MS, post_window_ms: int = POST_WINDOW_MS, subjects: list[str] = SUBJECTS):
     for subject in tqdm(subjects, desc="Processing subjects"):
         fix_df = load_fixations(subject)
         raw, data, times, channel_names = DataLoader.load_eeg(subject)
 
-        segments, labels = epoch_fixations(data, times, fix_df, pre_window_ms, post_window_ms)
+        segments, labels, stimulus_summary = epoch_fixations(data, times, fix_df, pre_window_ms, post_window_ms)
         fs = raw.info["sfreq"]
         expected_samples = int((pre_window_ms + post_window_ms) * fs / 1000)
-        X, y, removed = filter_segments(segments, labels, n_channels=data.shape[0], expected_samples=expected_samples, subject=subject)
+        X, y, stimulus_summary, removed = filter_segments(segments, labels, stimulus_summary, n_channels=data.shape[0], expected_samples=expected_samples, subject=subject)
         if removed:
             print(f"Removed {removed} segments with wrong shape (expected {(data.shape[0], expected_samples)})")
 
@@ -84,6 +94,5 @@ def label_eeg_data(pre_window_ms: int = 500, post_window_ms: int = 1000, subject
 
         # Time axis relative to fixation
         time_axis_ms = np.arange(expected_samples) * (1000.0 / fs) - pre_window_ms
-
-        save_training_npz(subject, pre_window_ms, post_window_ms, X, y, channel_names, fs, time_axis_ms)
+        save_training_npz(subject, pre_window_ms, post_window_ms, X, y, stimulus_summary, channel_names, fs, time_axis_ms)
         print(f"Saved {len(X)} segments for {subject} with {len(channel_names)} channels")

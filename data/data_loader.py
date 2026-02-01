@@ -1,9 +1,11 @@
+from collections import Counter
 import os
 import warnings
 import mne
 import numpy as np
 from pathlib import Path
 import pandas as pd
+import gc
 
 
 from typing import List, Optional, Sequence, Tuple, Union
@@ -38,22 +40,27 @@ class DataLoader:
         cls,
         subjects: Union[str, Sequence[str]],
         et_data_dir: Path = LABELED_ET_DATA_DIR
-    ) -> pd.DataFrame:
+    ) -> Tuple[pd.DataFrame, Optional[pd.Series]]:
         """
         Load labeled eyetracking data for one or more subjects from LABELED_ET_DATA_DIR.
         Returns:
             df: Single DataFrame with all data and a 'subject' column
+            stimulus_summary: pd.Series if present, else None
         """
         subj_list = [subjects] if isinstance(subjects, str) else list(subjects)
         df_list = []
+        stimulus_summary = None
         for subj in subj_list:
             et_path = Path(et_data_dir) / f"{subj}_labeled_events.csv"
             df = pd.read_csv(et_path)
             df = df[df["event_type"] == "Fixation"]
             df['subject'] = subj
+            if 'stimulus_summary' in df.columns:
+                if stimulus_summary is None:
+                    stimulus_summary = df['stimulus_summary']
             df_list.append(df)
         big_df = pd.concat(df_list, ignore_index=True)
-        return big_df
+        return big_df, stimulus_summary
 
     @classmethod
     def load_features(
@@ -61,13 +68,14 @@ class DataLoader:
         subjects: Union[str, Sequence[str]],
         mode: str = "advanced",
         channels: List[str] = EEG_CHANNEL_NAMES
-    ) -> Tuple[np.ndarray, np.ndarray, List[str], List[str]]:
+    ) -> Tuple[np.ndarray, np.ndarray, List[str], List[str], Optional[pd.Series]]:
 
         subj_list = [subjects] if isinstance(subjects, str) else list(subjects)
         X_blocks = []
         y_blocks = []
         subject_ids = []
         feature_names = None
+        stimulus_summary = None
         for subj in subj_list:
             feat_path = Path(FEATURES_DIR) / mode / subj / "features.csv"
             df = pd.read_csv(feat_path)
@@ -78,6 +86,9 @@ class DataLoader:
                 if 'label' in df.columns and 'label' not in selected_cols:
                     selected_cols.append('label')
                 df = df[selected_cols]
+            if 'stimulus_summary' in df.columns:
+                if stimulus_summary is None:
+                    stimulus_summary = df['stimulus_summary']
             if 'label' in df.columns:
                 X = df.drop(columns=["label"]).values
                 y = df["label"].values
@@ -91,76 +102,73 @@ class DataLoader:
             subject_ids.extend([subj] * len(X))
         X_out = np.vstack(X_blocks)
         y_out = np.concatenate(y_blocks) if y_blocks else None
-        return X_out, y_out, feature_names, subject_ids
+        return X_out, y_out, feature_names, subject_ids, stimulus_summary
     
     
     @classmethod
     def load_et_features(
         cls,
         subjects: Union[str, Sequence[str]],
-    ) -> Tuple[np.ndarray, np.ndarray, List[str], List[str]]:
+    ) -> Tuple[np.ndarray, np.ndarray, List[str], List[str], Optional[pd.Series]]:
 
         subj_list = [subjects] if isinstance(subjects, str) else list(subjects)
         X_blocks = []
         y_blocks = []
         subject_ids = []
         feature_names = None
-        
+        stimulus_summary = None
         for subj in subj_list:
             feat_path = Path(FEATURES_DIR) / "et_features" / f"{subj}_features.csv"
-            
             if not feat_path.exists():
                 print(f"Warning: Feature file not found for {subj}: {feat_path}")
                 continue
-                
             df = pd.read_csv(feat_path)
-            
             # Define columns to exclude from features (metadata and label)
             exclude_cols = ['subject', 'stimulus', 'fixation_on_airplane']
-            
+            if 'stimulus_summary' in df.columns:
+                if stimulus_summary is None:
+                    stimulus_summary = df['stimulus_summary']
             if 'fixation_on_airplane' in df.columns:
                 y = df['fixation_on_airplane'].values
             else:
                 raise ValueError(f"No 'fixation_on_airplane' column found in {feat_path}")
-            
             # Get feature columns (exclude metadata and label)
             feature_cols = [col for col in df.columns if col not in exclude_cols]
             X = df[feature_cols].values
-            
             # Store feature names from first subject
             if feature_names is None:
                 feature_names = feature_cols
             elif feature_cols != feature_names:
                 print(f"Warning: Feature mismatch for {subj}. Expected {len(feature_names)}, got {len(feature_cols)}")
-            
             X_blocks.append(X)
             y_blocks.append(y)
             subject_ids.extend([subj] * len(X))
-        
         if not X_blocks:
             raise ValueError(f"No features loaded for subjects: {subj_list}")
-        
         X_out = np.vstack(X_blocks)
         y_out = np.concatenate(y_blocks)
-    
-        return X_out, y_out, feature_names, subject_ids
+        return X_out, y_out, feature_names, subject_ids, stimulus_summary
     
 
     @classmethod
     def load_subject_labeled_eeg(
         cls, 
-        subject: str, 
+        subject: str,
+        labeled_eeg_data_dir: Path = LABELED_EEG_DATA_DIR,
         channels: List[str] = EEG_CHANNEL_NAMES,
-        pre_window_ms: int = 1000, 
-        post_window_ms: int = 1000
-    ) -> Tuple[np.ndarray, np.ndarray, List[str], dict]:
-        
-        path = LABELED_EEG_DATA_DIR / subject / f"{pre_window_ms}_{post_window_ms}_training_data.npz"
+        pre_window_ms: int = PRE_WINDOW_MS, 
+        post_window_ms: int = POST_WINDOW_MS
+    ) -> Tuple[np.ndarray, np.ndarray, List[str], np.ndarray, dict]:
+        """
+        Loads subject EEG data and returns X, y, channel_names, stimulus_summary, metadata
+        """
+        path = labeled_eeg_data_dir / subject / f"{pre_window_ms}_{post_window_ms}_training_data.npz"
         data = np.load(str(path))
 
         X = data["X"] # (fixations, channels, samples)
         y = data["y"]
         channel_names = data["channel_names"].tolist()
+        stimulus_summary = data["stimulus_summary"]
 
         missing = [ch for ch in channels if ch not in channel_names]
         if missing:
@@ -179,153 +187,249 @@ class DataLoader:
         }
 
         assert channels == channel_names
-        return X, y, channel_names, metadata
+        return X, y, channel_names, stimulus_summary, metadata
 
+    
+    # ============================================================================
+    # COLAB-SPECIFIC DATA LOADING FUNCTIONS
+    # ============================================================================
+    @classmethod
+    def load_labeled_eeg_data(self, subjects, channels, 
+                    labeled_eeg_data_dir=COLAB_LABELED_EEG_DIR,
+                    epoch_start_ms=EPOCH_START_MS,
+                    epoch_end_ms=EPOCH_END_MS,
+                    pre_ms=PRE_WINDOW_MS,
+                    post_ms=POST_WINDOW_MS,
+                    fs=EEG_SAMPLE_FREQUENCY):
+        """
+        Load EEG data for specified subjects and channels.
+        """
+        print("\n" + "="*70)
+        print("LOADING EEG DATA")
+        print("="*70)
+        
+        all_X, all_y, all_subjects = [], [], []
+        
+        # Calculate epoch indices
+        total_time_points = int((pre_ms + post_ms) / 1000 * fs)
+        fixation_idx = int(pre_ms / 1000 * fs)
+        epoch_start_idx = fixation_idx + int(epoch_start_ms / 1000 * fs)
+        epoch_end_idx = fixation_idx + int(epoch_end_ms / 1000 * fs)
+        
+        print(f"\nEpoch settings:")
+        print(f"  Window: [-{pre_ms}, {post_ms}] ms")
+        print(f"  Epoch: [{epoch_start_ms}, {epoch_end_ms}] ms (indices {epoch_start_idx}:{epoch_end_idx})")
+        print(f"  Sampling rate: {fs} Hz")
+        
+        # Load data from each subject
+        print(f"\nLoading from {len(subjects)} subjects...")
+        for subject in subjects:
+            file_path = labeled_eeg_data_dir / subject / f"{pre_ms}_{post_ms}_training_data.npz"
+            
+            if not file_path.exists():
+                print(f"  ⚠ {subject}: File not found")
+                continue
+            
+            # Load data with memory mapping
+            with np.load(file_path, mmap_mode='r') as data:
+                ch_names = data['channel_names']
+                
+                # Find channel indices
+                ch_indices = [list(ch_names).index(ch) for ch in channels if ch in ch_names]
+                
+                if len(ch_indices) == 0:
+                    print(f"  ⚠ {subject}: No matching channels found")
+                    continue
+                
+                # Load only needed data
+                X_selected = data['X'][:, ch_indices, epoch_start_idx:epoch_end_idx].copy().astype(np.float32)
+                y = data['y'][:]
+            
+            all_X.append(X_selected)
+            all_y.append(y)
+            all_subjects.extend([subject] * len(y))
+            
+            del X_selected
+            gc.collect()
+        
+        # Combine all subjects
+        X_combined = np.concatenate(all_X, axis=0).astype(np.float32)
+        y_combined = np.concatenate(all_y, axis=0)
+        del all_X, all_y
+        gc.collect()
+        
+        # Print summary
+        print(f"\n✓ Data loaded:")
+        print(f"  Total trials: {X_combined.shape[0]}")
+        print(f"  From {len(set(all_subjects))} subjects")
+        print(f"  Channels: {len(ch_indices)}")
+        print(f"  Time points: {X_combined.shape[2]}")
+        print(f"  Duration: {(epoch_end_ms - epoch_start_ms)} ms")
+        
+        # Print label distribution
+        label_counts = Counter(y_combined)
+        total_samples = len(y_combined)
+        print(f"\nLabel distribution:")
+        for label, count in sorted(label_counts.items()):
+            proportion = count / total_samples
+            print(f"  Label {label}: {count} samples ({proportion:.2%})")
+        
+        return X_combined, y_combined, np.array(all_subjects)
 
     @classmethod
-    def load_labeled_eeg_data(
-        cls,
-        subjects: Union[str, Sequence[str]],
-        channels: Optional[Union[str, Sequence[str]]] = EEG_CHANNEL_NAMES,
-        pre_window_ms: int = 1000,
-        post_window_ms: int = 1000,
-    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-        # Normalize single subject or channel to list
-        subject_list = [subjects] if isinstance(subjects, str) else list(subjects)
-        channel_list = [channels] if isinstance(channels, str) else list(channels)
+    def load_stimulus_summary(self, subjects, pre_ms=PRE_WINDOW_MS, post_ms=POST_WINDOW_MS, labeled_eeg_data_dir=COLAB_LABELED_EEG_DIR):
+        """
+        Load stimulus summary for each trial.
+        """
+        print("\n" + "="*70)
+        print("LOADING STIMULUS SUMMARY")
+        print("="*70)
+        
+        all_stim = []
+        
+        print(f"\nLoading from {len(subjects)} subjects...")
+        for subject in subjects:
+            file_path = labeled_eeg_data_dir / subject / f"{pre_ms}_{post_ms}_training_data.npz"
+            
+            if not file_path.exists():
+                print(f"  ⚠ {subject}: File not found")
+                continue
+            
+            # Load stimulus data
+            with np.load(file_path, mmap_mode='r') as data:
+                if 'stimulus_summary' in data:
+                    stim = data['stimulus_summary'][:]
+                elif 'stimulus' in data:
+                    stim = data['stimulus'][:]
+                else:
+                    print(f"  ⚠ {subject}: No stimulus data found")
+                    continue
+            
+            all_stim.append(stim)
+        
+        # Combine all subjects
+        stimulus_combined = np.concatenate(all_stim, axis=0)
+        del all_stim
+        gc.collect()
+        
+        print(f"\n✓ Stimulus summary loaded:")
+        print(f"  Total samples: {stimulus_combined.shape[0]}")
+        print(f"  Shape: {stimulus_combined.shape}")
+        
+        return stimulus_combined
 
-        X_blocks: List[np.ndarray] = []
-        y_blocks: List[np.ndarray] = []
-        subject_ids: List[str] = []
-        time_axis: Optional[np.ndarray] = None
-        selected_names_ref: Optional[List[str]] = None
+    @classmethod
+    def load_labeled_eeg_data_with_stimulus(self, subjects, channels,
+                                epoch_start_ms=EPOCH_START_MS,
+                                epoch_end_ms=EPOCH_END_MS,
+                                pre_ms=PRE_WINDOW_MS,
+                                post_ms=POST_WINDOW_MS,
+                                fs=EEG_SAMPLE_FREQUENCY,
+                                labeled_eeg_data_dir=COLAB_LABELED_EEG_DIR):
+        """
+        Load EEG data AND stimulus summary together.
+        """
+        print("\n" + "="*70)
+        print("LOADING EEG DATA WITH STIMULUS SUMMARY")
+        print("="*70)
+        
+        all_X, all_y, all_subjects, all_stim = [], [], [], []
+        
+        # Calculate epoch indices
+        total_time_points = int((pre_ms + post_ms) / 1000 * fs)
+        fixation_idx = int(pre_ms / 1000 * fs)
+        epoch_start_idx = fixation_idx + int(epoch_start_ms / 1000 * fs)
+        epoch_end_idx = fixation_idx + int(epoch_end_ms / 1000 * fs)
+        
+        print(f"\nEpoch settings:")
+        print(f"  Window: [-{pre_ms}, {post_ms}] ms")
+        print(f"  Epoch: [{epoch_start_ms}, {epoch_end_ms}] ms")
+        print(f"  Sampling rate: {fs} Hz")
+        
+        # Load data from each subject
+        print(f"\nLoading from {len(subjects)} subjects...")
+        for subject in subjects:
+            file_path = labeled_eeg_data_dir / subject / f"{pre_ms}_{post_ms}_training_data.npz"
+            
+            if not file_path.exists():
+                print(f"  ⚠ {subject}: File not found")
+                continue
+            
+            # Load all data
+            with np.load(file_path, mmap_mode='r') as data:
+                ch_names = data['channel_names']
+                
+                # Find channel indices
+                ch_indices = [list(ch_names).index(ch) for ch in channels if ch in ch_names]
+                
+                if len(ch_indices) == 0:
+                    print(f"  ⚠ {subject}: No matching channels")
+                    continue
+                
+                # Load EEG
+                X_selected = data['X'][:, ch_indices, epoch_start_idx:epoch_end_idx].copy().astype(np.float32)
+                y = data['y'][:]
+                
+                # Load stimulus
+                if 'stimulus_summary' in data:
+                    stim = data['stimulus_summary'][:].copy()
+                elif 'stimulus' in data:
+                    stim = data['stimulus'][:].copy()
+                else:
+                    print(f"  ⚠ {subject}: No stimulus data, using zeros")
+                    stim = np.zeros(len(y))
+            
+            all_X.append(X_selected)
+            all_y.append(y)
+            all_stim.append(stim)
+            all_subjects.extend([subject] * len(y))
+            
+            del X_selected, stim
+            gc.collect()
+        
+        # Combine all subjects
+        X_combined = np.concatenate(all_X, axis=0).astype(np.float32)
+        y_combined = np.concatenate(all_y, axis=0)
+        stimulus_combined = np.concatenate(all_stim, axis=0)
+        del all_X, all_y, all_stim
+        gc.collect()
+        
+        # Print summary
+        print(f"\n✓ Data loaded:")
+        print(f"  EEG: {X_combined.shape}")
+        print(f"  Labels: {y_combined.shape}")
+        print(f"  Stimulus: {stimulus_combined.shape}")
+        print(f"  Subjects: {len(set(all_subjects))}")
+        
+        # Print label distribution
+        label_counts = Counter(y_combined)
+        total_samples = len(y_combined)
+        print(f"\nLabel distribution:")
+        for label, count in sorted(label_counts.items()):
+            proportion = count / total_samples
+            print(f"  Label {label}: {count} samples ({proportion:.2%})")
+        
+        return X_combined, y_combined, np.array(all_subjects), stimulus_combined
 
-        for subj in subject_list:
-            X, y, selected_names_curr, metadata = cls.load_subject_labeled_eeg(
-                subj, channels=channel_list, pre_window_ms=pre_window_ms, post_window_ms=post_window_ms
-            )
 
-            # Ensure consistent channel order across subjects
-            if selected_names_ref is None:
-                selected_names_ref = selected_names_curr
-            elif selected_names_curr != selected_names_ref:
-                raise ValueError(
-                    f"Channel order mismatch for subject {subj}. "
-                    f"Expected {selected_names_ref}, got {selected_names_curr}"
-                )
+    # ============================================================================
+    # USAGE EXAMPLES
+    # ============================================================================
 
-            X_blocks.append(X)
-            y_blocks.append(y)
-            subject_ids.extend([subj] * len(X))
+    """
+    # Load only EEG data
+    from config import SUBJECTS, DEFAULT_EEG_CHANNELS
+    X, y, subjects = load_eeg_data(SUBJECTS, DEFAULT_EEG_CHANNELS)
 
-            # Capture and check consistent time axis
-            if time_axis is None:
-                if metadata["time"] is None:
-                    raise KeyError("'time' axis missing from NPZ.")
-                time_axis = metadata["time"]
-            elif not np.allclose(time_axis, metadata["time"]):
-                raise ValueError("Time axis mismatch across subjects.")
+    # Load EEG and stimulus together
+    X, y, subjects, stimulus = load_eeg_data_with_stimulus(SUBJECTS, DEFAULT_EEG_CHANNELS)
 
-        X_out = np.concatenate(X_blocks, axis=0)
-        y_out = np.concatenate(y_blocks, axis=0)
-
-        return X_out, y_out, time_axis, np.array(subject_ids)
+    # Then use with split functions
+    from data_split import split_normal
+    X_train, X_val, X_test, y_train, y_val, y_test, stim_train, stim_val, stim_test = \
+        split_normal(X, y, stimulus_summary=stimulus)
+    """
 
 
 
 
-
-
-
-#     def load_segment_time_axis(
-#         self, subject: str, pre_window_ms: int = 500, post_window_ms: int = 500
-#     ) -> np.ndarray:
-#         """
-#         Load the common per-segment time vector from the subject NPZ.
-
-#         Returns a 1D array aligned to the segment window, typically
-#         spanning [-pre_s, ..., +post_s) with sampling based on the stored rate.
-#         """
-#         path = LABELED_EEG_DATA_DIR / subject / f"{pre_window_ms}_{post_window_ms}_training_data.npz"
-#         data = np.load(str(path))
-#         if "time" not in data.files:
-#             raise KeyError("'time' not found in NPZ for subject. Regenerate data to include time axis.")
-#         return data["time"]
-
-
-
-
-# # Backward compatible module-level wrappers (used by older code paths)
-# def load_training_data(subject: str, pre_window_ms: int = 500, post_window_ms: int = 500):
-#     dl = DataLoader()
-#     return dl._load_subject_labeled_eeg(subject, pre_window_ms, post_window_ms)
-
-
-# def select_channels_by_name(X, available_channels, desired_channels):
-#     dl = DataLoader()
-#     return dl.select_channels_by_name(X, available_channels, desired_channels)
-
-
-
-
-
-# def prepare_data_for_eegnet(X, y, test_size=0.3, val_size=0.5, random_state=42):
-    
-#     # Add kernel dimension for EEGNet (channels_last format)
-#     X = X.reshape(X.shape[0], X.shape[1], X.shape[2], 1)
-    
-#     # First split: train+val vs test
-#     X_temp, X_test, y_temp, y_test = train_test_split(
-#         X, y, test_size=test_size, shuffle=True, stratify=y, random_state=random_state
-#     )
-    
-#     # Second split: train vs val
-#     X_train, X_val, y_train, y_val = train_test_split(
-#         X_temp, y_temp, test_size=val_size, shuffle=True, stratify=y_temp, random_state=random_state
-#     )
-    
-#     # Convert labels to categorical (one-hot encoding)
-#     n_classes = len(np.unique(y))
-#     y_train = np_utils.to_categorical(y_train.astype(int), num_classes=n_classes)
-#     y_val = np_utils.to_categorical(y_val.astype(int), num_classes=n_classes)
-#     y_test = np_utils.to_categorical(y_test.astype(int), num_classes=n_classes)
-    
-#     return X_train, X_val, X_test, y_train, y_val, y_test
-
-# def load_and_prepare_eegnet_data(subject, desired_channels=None, **kwargs):
-    
-#     if desired_channels is None:
-#         desired_channels = DEFAULT_EEGNET_CHANNELS
-    
-#     # Load raw data via DataLoader for backward compatibility
-#     dl = DataLoader()
-#     X, y, channel_names, _metadata = dl._load_subject_labeled_eeg(subject, 500, 500)
-    
-#     # Select desired channels
-#     X_selected, _idx, selected_channels = dl.select_channels_by_name(
-#         X, channel_names, desired_channels
-#     )
-    
-#     # Prepare for EEGNet
-#     X_train, X_val, X_test, y_train, y_val, y_test = prepare_data_for_eegnet(
-#         X_selected, y, **kwargs
-#     )
-    
-#     return X_train, X_val, X_test, y_train, y_val, y_test, selected_channels
-
-# def get_channel_info(subject):
-#     """
-#     Quick function to check what channels are available for a subject.
-#     """
-#     try:
-#         dl = DataLoader()
-#         X, y, channel_names, metadata = dl._load_subject_labeled_eeg(subject, 500, 500)
-#         print(f"\nSubject {subject} channel info:")
-#         print(f"Available channels ({len(channel_names)}): {channel_names}")
-#         print(f"Data shape: {X.shape}")
-#         print(f"Available in DEFAULT_EEGNET_CHANNELS: {[ch for ch in DEFAULT_EEGNET_CHANNELS if ch in channel_names]}")
-#         print(f"Missing from DEFAULT_EEGNET_CHANNELS: {[ch for ch in DEFAULT_EEGNET_CHANNELS if ch not in channel_names]}")
-#         return channel_names
-#     except FileNotFoundError:
-#         print(f"No training data found for {subject}")
-#         return None

@@ -1,4 +1,5 @@
 import os
+import json
 from typing import List
 import numpy as np
 import pandas as pd
@@ -172,13 +173,13 @@ def get_stimuli_for_subject(subject_dir, extension=".jpg.txt"):
 # --------------------------
 # Process a single stimulus
 # --------------------------
-def process_stimulus_with_counts(subject, stimulus):
+def process_stimulus_with_counts(subject, stimulus, b_synch_subj):
     # Skip gray stimuli
     if "gray" in stimulus.lower():
         return None
 
     et_data_path = os.path.join(ET_DIR, subject, f"{stimulus}.jpg.txt")
-    df = pd.read_csv(et_data_path, comment='#', names=COLUMN_NAMES, low_memory=False)
+    df = pd.read_csv(et_data_path, comment='#', names=ET_COLUMN_NAMES, low_memory=False)
 
     df = add_stimulus_coords(df)
     df[['mean_x', 'mean_y', 'event']] = df.apply(combine_gaze_with_event, axis=1, result_type='expand')
@@ -209,6 +210,7 @@ def process_stimulus_with_counts(subject, stimulus):
         'subject': subject,
         'stimulus': stimulus,
         'stimulus_onset': stim_onset_time,
+        "eeg_stimulus_onset": transform_et_time_to_eeg_time(stim_onset_time, b_synch_subj),
         'n_airplanes': n_airplanes,
         'n_fixated_airplanes': n_fixated_airplanes,
         "n_fixations_on_airplane": labeled_event_df[
@@ -220,6 +222,13 @@ def process_stimulus_with_counts(subject, stimulus):
             (labeled_event_df['fixation_on_airplane'] == False)
         ].shape[0]
     }
+
+
+    # convert all values to Python native types
+    summary_python = {k: (v.item() if isinstance(v, (np.integer, np.floating)) else v)
+                    for k, v in summary.items()}
+
+    labeled_event_df["stimulus_summary"] = [json.dumps(summary_python)] * len(labeled_event_df)
 
     return labeled_event_df, summary
 
@@ -235,8 +244,12 @@ def label_et_data(subjects: List[str], n_jobs: int = 4):
         subject_dir = os.path.join(ET_DIR, subject)
         stimuli = get_stimuli_for_subject(subject_dir)
 
+        # Vectorized EEG time transformation
+        df_time_synch = pd.read_excel(TIME_SYNCH_PATH, engine="openpyxl")
+        b_synch_subj = df_time_synch.loc[df_time_synch['Participant No.'] == subject, 'b'].values[0]
+
         results = Parallel(n_jobs=n_jobs)(
-            delayed(process_stimulus_with_counts)(subject, stim) for stim in stimuli
+            delayed(process_stimulus_with_counts)(subject, stim, b_synch_subj) for stim in stimuli
         )
 
         # Filter out None (gray stimuli)
@@ -250,20 +263,10 @@ def label_et_data(subjects: List[str], n_jobs: int = 4):
 
         subject_df = pd.concat(all_subject_dfs, ignore_index=True)
 
-        # Vectorized EEG time transformation
-        df_time_synch = pd.read_excel(TIME_SYNCH_PATH, engine="openpyxl")
-        b_test_subj = df_time_synch.loc[df_time_synch['Participant No.'] == subject, 'b'].values[0]
 
         # Transform start/end times to EEG time
-        subject_df["eeg_time_start"] = transform_et_time_to_eeg_time(subject_df["start_time"], b_test_subj)
-        subject_df["eeg_end_start"] = transform_et_time_to_eeg_time(subject_df["end_time"], b_test_subj)
-
-        # Transform stimulus onset to EEG time
-        subject_df["eeg_stimulus_onset"] = transform_et_time_to_eeg_time(subject_df["stimulus_onset"], b_test_subj)
-
-        # Also update the summary list with EEG times
-        for summary in summary_list[-len(results):]:  # only the current subject/stimuli
-            summary["eeg_stimulus_onset"] = transform_et_time_to_eeg_time(summary["stimulus_onset"], b_test_subj)
+        subject_df["eeg_time_start"] = transform_et_time_to_eeg_time(subject_df["start_time"], b_synch_subj)
+        subject_df["eeg_end_start"] = transform_et_time_to_eeg_time(subject_df["end_time"], b_synch_subj)
 
         save_path = os.path.join(LABELED_ET_ALL_DATA_DIR, f"{subject}_labeled_events.csv")
         subject_df.to_csv(save_path, index=False)

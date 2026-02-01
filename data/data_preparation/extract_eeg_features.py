@@ -6,7 +6,7 @@ import pyeeg
 from pathlib import Path
 from scipy import stats
 
-from data.data_configs import EEG_CHANNEL_NAMES, FEATURES_DIR, SUBJECTS, DEFAULT_EEGNET_CHANNELS
+from data.data_configs import EEG_CHANNEL_NAMES, FEATURES_DIR, SUBJECTS, DEFAULT_EEG_CHANNELS
 from data.data_loader import DataLoader
 
 ADVANCED_FEATURE_NAMES = [
@@ -129,7 +129,7 @@ def extract_and_save_subject_features(subject: str, channels: List[str], mode: s
     """
     Extract features for a single subject and save to CSV.
     """
-    X, y, channel_names, metadata = DataLoader.load_subject_labeled_eeg(subject, channels)
+    X, y, channel_names, stimulus_summary, metadata = DataLoader.load_subject_labeled_eeg(subject, channels)
     sfreq = float(metadata['sampling_rate'])
     all_features, all_names = extract_features_for_subject(X, sfreq, channel_names, mode=mode)
     # Save in subfolder by mode ("simple" or "advanced")
@@ -137,6 +137,7 @@ def extract_and_save_subject_features(subject: str, channels: List[str], mode: s
     output_dir.mkdir(parents=True, exist_ok=True)
     df = pd.DataFrame(all_features, columns=all_names)
     df['label'] = np.squeeze(y)
+    df['stimulus_summary'] = stimulus_summary
     df.to_csv(output_dir / "features.csv", index=False)
     return df, y, output_dir
 
