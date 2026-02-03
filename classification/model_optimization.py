@@ -26,7 +26,7 @@ from classification.models.features.et_feature_classifier import ETFeatureClassi
 
 # Import data utilities
 from data.data_loader import DataLoader
-from data.data_configs import SUBJECTS
+from data.data_configs import CBRAMOD_CHANNELS, SUBJECTS
 import os
 
 # Path configuration for different environments
@@ -51,21 +51,21 @@ DEFAULT_EEG_CHANNELS = ['F3', 'F4', 'F7', 'F8', 'Fz', 'FC1', 'FC2', 'FC5', 'FC6'
 # Model parameter grids - reduced for efficiency but educated choices
 PARAM_GRIDS = {
     'eegnet': {
-        'dropout': [0.3, 0.5],  # Most common effective values
-        'kernels_1': [64, 128],  # Focus on proven architectures
-        'kernels_2': [16, 32],   # Reduced but covers key options
-        'learning_rate': [0.001, 0.0001]  # Standard range
+        'dropoutRate': [0.3, 0.5],  # Most common effective values
+        'kernLength': [64, 128],  # Focus on proven architectures
+        'F1': [8, 16],   # Number of temporal filters
+        'D': [2, 4],     # Depth multiplier
+        'F2': [16, 32]   # Number of pointwise filters
     },
     'cbramod': {
-        'dropout': [0.2, 0.3],  # Most effective range for transformers
-        'learning_rate': [0.0005, 0.0001],  # Conservative for large models
-        'd_model': [128, 256],  # Focus on medium-large architectures
-        'num_heads': [8, 16]    # Proven attention configurations
+        'dropout': [0.1, 0.2],  # Most effective range for transformers
+        'hidden_dim': [256, 512],  # Focus on medium-large architectures
+        'label_smoothing': [0.0, 0.1]  # Label smoothing options
     },
     'csp': {
         'n_components': [4, 6, 8, 10],  # Reduced but covers key range
-        'clf_type': ['lda', 'svm', 'rf'],
-        'reg_param': [0.01, 0.1, None]  # Simplified regularization
+        'clf_type': ['lda', 'rf'],  # Only supported types
+        'reg': [0.01, 0.1, None]  # Simplified regularization (correct parameter name)
     },
     'features_rf': {
         'n_estimators': [100, 200],  # Focus on proven values
@@ -130,8 +130,16 @@ def load_model_data(model_name, subjects, selected_channels=None, use_cache=True
     data_path = get_data_path()
     
     if model_name in ['eegnet', 'cbramod', 'csp']:
-        # Raw EEG data - temporarily disabled until load_all_subjects_data is implemented
-        raise NotImplementedError(f"Raw EEG loading for {model_name} needs load_all_subjects_data method in DataLoader")
+        # Raw EEG data using load_labeled_eeg_data method
+        data_loader = DataLoader(data_path=str(data_path))
+        
+        # Use default channels if none provided for raw EEG models
+        if selected_channels is None:
+            selected_channels = DEFAULT_EEG_CHANNELS
+            
+        # Use the correct path for labeled EEG data
+        labeled_eeg_dir = data_path / 'data' / 'labeled_eeg_data'
+        X, y, _ = data_loader.load_labeled_eeg_data(subjects, selected_channels, labeled_eeg_data_dir=labeled_eeg_dir)
         
     elif model_name.startswith('features_'):
         # EEG features with channel filtering support
@@ -142,8 +150,10 @@ def load_model_data(model_name, subjects, selected_channels=None, use_cache=True
         X, y, _, _, _ = data_loader.load_features(subjects, mode="advanced", channels=channel_names)
         
     elif model_name.startswith('et_'):
-        # ET features - temporarily disable until ET method is converted
-        raise NotImplementedError(f"ET loading for {model_name} needs load_et_features instance method in DataLoader")
+        # ET features using load_et_features instance method
+        data_loader = DataLoader(data_path=str(data_path))
+        X, y, _, _, _ = data_loader.load_et_features(subjects)
+        
     else:
         raise ValueError(f"Unknown model type: {model_name}")
     
@@ -153,22 +163,20 @@ def load_model_data(model_name, subjects, selected_channels=None, use_cache=True
         
     return X, y
 
-def optimize_single_model(model_name, subjects, selected_channels=None, max_trials=10, split_strategy='normal'):
+def optimize_single_model(model_name, subjects, max_trials=10, split_strategy='normal', test_mode=False):
     """Optimize parameters for one model
     
     Args:
         model_name: Name of the model to optimize
         subjects: List of subject IDs
-        selected_channels: List of channel names (strings) to use for features
         max_trials: Maximum number of parameter combinations to try
         split_strategy: Data split strategy to use
+        test_mode: If True, only test model creation without training
     """
     print(f"Optimizing {model_name} with {split_strategy} split...")
-    if selected_channels:
-        print(f"Using channels: {selected_channels}")
     
     # Load data once
-    X, y = load_model_data(model_name, subjects, selected_channels)
+    X, y = load_model_data(model_name, subjects, CBRAMOD_CHANNELS)
     
     # Get split sizes based on strategy
     splits = DATA_SPLIT_STRATEGIES[split_strategy]
@@ -209,20 +217,28 @@ def optimize_single_model(model_name, subjects, selected_channels=None, max_tria
             elif model_name == 'et_svm':
                 model = ETFeatureClassifier(model_type='svm', **{k:v for k,v in params.items() if k != 'model_type'})
             
-            # Train and evaluate - free memory after each trial
-            results = model.train(X_train, y_train, X_val, y_val)
-            
-            if 'validation' in results:
-                score = results['validation']['balanced_accuracy']
+            if test_mode:
+                # Just test model creation and data shape compatibility
+                print(f"  ✓ Model created successfully with {params}")
+                print(f"  ✓ Data shape: {X_train.shape}, Labels: {y_train.shape}")
+                score = 0.5  # Dummy score for test mode
             else:
-                score = results['test']['balanced_accuracy']
+                # Train and evaluate - free memory after each trial
+                results = model.train(X_train, y_train, X_val, y_val)
+                
+                if 'validation' in results:
+                    score = results['validation']['balanced_accuracy']
+                else:
+                    score = results['test']['balanced_accuracy']
                 
             if score > best_score:
                 best_score = score
                 best_params = params.copy()
                 
             # Clean up memory after each trial
-            del model, results
+            del model
+            if not test_mode:
+                del results
             cleanup_memory()
                 
         except Exception as e:
@@ -233,9 +249,15 @@ def optimize_single_model(model_name, subjects, selected_channels=None, max_tria
     print(f"  Best {model_name}: {best_score:.4f} with {best_params}")
     return best_params, best_score
 
-def optimize_all_models(subjects=None, max_trials=15, split_strategies=['normal', 'leave_one_out']):
+def optimize_all_models(subjects=None, max_trials=15, split_strategies=['normal', 'leave_one_out'], test_mode=False):
     """
     Find optimal parameters for all models and save to file
+    
+    Args:
+        subjects: List of subject IDs
+        max_trials: Maximum number of parameter combinations per model
+        split_strategies: List of data split strategies
+        test_mode: If True, only test model creation without training
     """
     if subjects is None:
         subjects = SUBJECTS[:5]  # Use subset for optimization
@@ -247,6 +269,7 @@ def optimize_all_models(subjects=None, max_trials=15, split_strategies=['normal'
     print(f"Subjects: {subjects}")
     print(f"Max trials per model: {max_trials}")
     print(f"Split strategies: {split_strategies}")
+    print(f"Test mode: {test_mode}")
     print(f"Results will be saved to: {results_path}")
     
     all_results = {}
@@ -261,7 +284,7 @@ def optimize_all_models(subjects=None, max_trials=15, split_strategies=['normal'
         for model_name in PARAM_GRIDS.keys():
             try:
                 best_params, best_score = optimize_single_model(
-                    model_name, subjects, max_trials, strategy
+                    model_name, subjects, max_trials, strategy, test_mode
                 )
                 optimal_params[model_name] = {
                     'params': best_params,
@@ -478,6 +501,46 @@ def quick_evaluation(split_strategy='normal'):
 def full_evaluation(split_strategy='normal'):
     """Full evaluation with all subjects"""
     return evaluate_all_models(SUBJECTS, split_strategy=split_strategy)
+
+def test_all_models():
+    """Test model creation and data loading without training (for debugging)"""
+    # Use subjects that actually have data
+    subjects = ['P10', 'P16']  # These were found in the data directory
+    return optimize_all_models(subjects, max_trials=1, split_strategies=['normal'], test_mode=True)
+
+def test_single_model_type(model_name):
+    """Test a specific model type"""
+    subjects = SUBJECTS[:2]
+    print(f"Testing {model_name}...")
+    try:
+        X, y = load_model_data(model_name, subjects, CBRAMOD_CHANNELS)
+        print(f"✓ Data loaded: {X.shape}, {y.shape}")
+        
+        # Test one parameter combination
+        params = list(ParameterGrid(PARAM_GRIDS[model_name]))[0]
+        print(f"✓ Testing parameters: {params}")
+        
+        if model_name == 'eegnet':
+            model = EEGNetClassifier(**params)
+        elif model_name == 'cbramod':
+            model = CBraModClassifier(**params)
+        elif model_name == 'csp':
+            model = CSPClassifier(**params)
+        elif model_name == 'features_rf':
+            model = FeatureClassifier(model_type='rf', **params)
+        elif model_name == 'features_svm':
+            model = FeatureClassifier(model_type='svm', **params)
+        elif model_name == 'et_rf':
+            model = ETFeatureClassifier(model_type='rf', **params)
+        elif model_name == 'et_svm':
+            model = ETFeatureClassifier(model_type='svm', **params)
+            
+        print(f"✓ Model created: {model}")
+        return True
+        
+    except Exception as e:
+        print(f"✗ Error testing {model_name}: {e}")
+        return False
 
 if __name__ == "__main__":
     # Example usage
