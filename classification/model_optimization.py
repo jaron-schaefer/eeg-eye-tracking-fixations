@@ -26,7 +26,7 @@ from classification.models.features.et_feature_classifier import ETFeatureClassi
 
 # Import data utilities
 from data.data_loader import DataLoader
-from data.data_configs import CBRAMOD_CHANNELS, SUBJECTS
+from data.data_configs import CBRAMOD_CHANNELS, SUBJECTS, DEFAULT_EEG_CHANNELS
 import os
 
 # Path configuration for different environments
@@ -34,9 +34,9 @@ def get_data_path():
     """Get data path - for Colab, data is next to repository folder."""
     current_dir = Path(__file__).parent.absolute()
     if '/content/' in str(current_dir):  # Running in Colab
-        return Path('/content/eye-eeg')
+        return Path('/content/drive/MyDrive/eye-eeg')
     else:  # Running locally
-        return current_dir.parent / 'data'
+        return current_dir.parent / 'data' / 'data'
 
 def get_results_path():
     """Get results path - always in classification directory."""
@@ -44,9 +44,6 @@ def get_results_path():
     results_dir.mkdir(exist_ok=True)
     return results_dir
 
-# EEG Channel mappings (names to indices)
-DEFAULT_EEG_CHANNELS = ['F3', 'F4', 'F7', 'F8', 'Fz', 'FC1', 'FC2', 'FC5', 'FC6',
-                        'Fp1', 'Fp2', 'Pz', 'P3', 'P4', 'P7', 'P8']
 
 # Model parameter grids - reduced for efficiency but educated choices
 PARAM_GRIDS = {
@@ -138,7 +135,7 @@ def load_model_data(model_name, subjects, selected_channels=None, use_cache=True
             selected_channels = DEFAULT_EEG_CHANNELS
             
         # Use the correct path for labeled EEG data
-        labeled_eeg_dir = data_path / 'data' / 'labeled_eeg_data'
+        labeled_eeg_dir = data_path / 'labeled_eeg_data'
         X, y, _ = data_loader.load_labeled_eeg_data(subjects, selected_channels, labeled_eeg_data_dir=labeled_eeg_dir)
         
     elif model_name.startswith('features_'):
@@ -340,12 +337,6 @@ def optimize_all_models(subjects=None, max_trials=15, split_strategies=['normal'
 
 def evaluate_single_model(model_name, params, subjects, selected_channels=None):
     """Evaluate single model with given parameters
-    
-    Args:
-        model_name: Name of the model to evaluate
-        params: Model parameters
-        subjects: List of subject IDs
-        selected_channels: List of channel names (strings) to use for features
     """
     
     # Load data with train/test split

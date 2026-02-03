@@ -47,12 +47,6 @@ class BaseEEGClassifier(abc.ABC):
         """Make binary predictions (0 or 1)"""
         pass
     
-    @abc.abstractmethod
-    def optimize(self, X_train: np.ndarray, y_train: np.ndarray,
-                          X_val: np.ndarray, y_val: np.ndarray, **kwargs) -> Dict[str, Any]:
-        """Find optimal hyperparameters using train/val data"""
-        pass
-    
     def evaluate(self, X: np.ndarray, y: np.ndarray, set_name: str = "Evaluation") -> Dict[str, Any]:
         """Standardized evaluation with all metrics"""
         if not self.is_trained:

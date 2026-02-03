@@ -22,19 +22,7 @@ class DataLoader:
     def _get_path(self, default_path):
         """Get path, using override if available."""
         if self.data_path:
-            # Convert relative paths to be relative to data_path
-            if isinstance(default_path, str):
-                default_path = Path(default_path)
-            if default_path.is_absolute():
-                # For absolute paths, try to find equivalent under data_path
-                relative_parts = default_path.parts
-                if 'data' in relative_parts:
-                    idx = relative_parts.index('data')
-                    return self.data_path / Path(*relative_parts[idx+1:])
-                else:
-                    return self.data_path / default_path.name
-            else:
-                return self.data_path / default_path
+            return self.data_path
         return default_path
 
     @classmethod
@@ -91,19 +79,6 @@ class DataLoader:
         channels: Optional[List[str]] = None
     ) -> Tuple[np.ndarray, np.ndarray, List[str], List[str], Optional[pd.Series]]:
         """Load EEG features with optional channel filtering.
-        
-        Args:
-            subjects: Subject ID(s) to load
-            mode: 'simple' or 'advanced' features
-            channels: List of channel names to filter by (e.g., ['P7', 'F3']). 
-                     If None, load all channels.
-        
-        Returns:
-            X: Feature matrix
-            y: Labels
-            feature_names: Names of selected features
-            subject_ids: Subject ID for each sample
-            stimulus_summary: Stimulus summary if available
         """
         subj_list = [subjects] if isinstance(subjects, str) else list(subjects)
         X_blocks = []
@@ -357,9 +332,11 @@ class DataLoader:
         print(f"\nLoading from {len(subjects)} subjects...")
         for subject in subjects:
             file_path = labeled_eeg_data_dir / subject / f"{pre_ms}_{post_ms}_training_data.npz"
+
+            
             
             if not file_path.exists():
-                print(f"  ⚠ {subject}: File not found")
+                print(f"{subject}: File not found")
                 continue
             
             # Load stimulus data
@@ -419,7 +396,7 @@ class DataLoader:
             file_path = labeled_eeg_data_dir / subject / f"{pre_ms}_{post_ms}_training_data.npz"
             
             if not file_path.exists():
-                print(f"  ⚠ {subject}: File not found")
+                print(f" {subject}: File not found")
                 continue
             
             # Load all data
