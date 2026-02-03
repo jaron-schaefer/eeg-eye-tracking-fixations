@@ -10,7 +10,7 @@ RAW_DATA_ROOT = DATA_ROOT / "raw_data"
 
 # Raw data directories
 RAW_EEG_DIR = RAW_DATA_ROOT / "EEG"
-EEG_DIR = RAW_DATA_ROOT / "EEG_clean"
+EEG_DIR = RAW_DATA_ROOT / "EEG_clean data"
 ET_DIR = RAW_DATA_ROOT / "ET_clip"
 IMAGE_DIR = RAW_DATA_ROOT / "Stimuli"
 LABELS_DIR = RAW_DATA_ROOT / "label"

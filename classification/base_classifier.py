@@ -34,11 +34,6 @@ class BaseEEGClassifier(abc.ABC):
         pass
     
     @abc.abstractmethod
-    def build_model(self, input_shape: Tuple, **kwargs) -> Any:
-        """Build the model architecture"""
-        pass
-    
-    @abc.abstractmethod
     def train(self, X_train: np.ndarray, y_train: np.ndarray,
              X_val: np.ndarray, y_val: np.ndarray, 
              X_test: Optional[np.ndarray] = None,
@@ -53,7 +48,7 @@ class BaseEEGClassifier(abc.ABC):
         pass
     
     @abc.abstractmethod
-    def optimize_parameters(self, X_train: np.ndarray, y_train: np.ndarray,
+    def optimize(self, X_train: np.ndarray, y_train: np.ndarray,
                           X_val: np.ndarray, y_val: np.ndarray, **kwargs) -> Dict[str, Any]:
         """Find optimal hyperparameters using train/val data"""
         pass

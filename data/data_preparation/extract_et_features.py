@@ -182,7 +182,7 @@ def extract_fixation_features(fix_df: pd.DataFrame, raw_df: pd.DataFrame,
     
     return pd.DataFrame(features_list)
 
-def process_eye_tracking_data(subjects: List[str], et_dir: str = ET_DIR, column_names: List[str] = ET_COLUMN_NAMES,
+def extract_et_features(subjects: List[str], et_dir: str = ET_DIR, column_names: List[str] = ET_COLUMN_NAMES,
                               output_dir: str = 'data/data/features/et_features') -> Dict[str, pd.DataFrame]:
 
     # Create output directory if it doesn't exist

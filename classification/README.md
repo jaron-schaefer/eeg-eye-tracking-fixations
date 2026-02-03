@@ -1,8 +1,54 @@
 # EEG Classification Module
 
-This module provides three integrated EEG classifiers with built-in data preparation, training, and optimization capabilities.
+## Model Optimization Pipeline
 
-## Classifiers
+Clean and simple pipeline to optimize and evaluate all EEG classification models.
+
+### Quick Start
+
+```bash
+# Local usage
+python run_optimization.py optimize    # Find optimal parameters
+python run_optimization.py evaluate    # Evaluate with optimal parameters
+python run_optimization.py quick       # Quick test run
+```
+
+### Google Colab (Recommended for GPU)
+
+Upload `model_optimization_colab.ipynb` to Google Colab for GPU-accelerated optimization.
+
+### Files
+
+- `model_optimization.py`: Main optimization functions
+- `run_optimization.py`: Simple command-line runner  
+- `model_optimization_colab.ipynb`: Google Colab notebook with GPU support
+
+### Supported Models
+
+- **EEGNet**: Deep learning for raw EEG
+- **CBRAMod**: Cross-attention transformer for raw EEG  
+- **CSP**: Common Spatial Patterns for raw EEG
+- **Feature RF/SVM**: Random Forest/SVM on EEG features
+- **ET RF/SVM**: Random Forest/SVM on eye tracking features
+
+### Output
+
+Results saved to `optimization_results/`:
+- `optimal_parameters_latest.json`: Best parameters for each model
+- `evaluation_results_latest.json`: Final test performance
+- Timestamped versions with full history
+
+### Channel Groups (for future analysis)
+
+- **Frontal**: ['F3', 'F4', 'F7', 'F8', 'Fz', 'Fp1', 'Fp2']
+- **Central**: ['FC1', 'FC2', 'FC5', 'FC6', 'Cz', 'C3', 'C4'] 
+- **Parietal**: ['P3', 'P4', 'P7', 'P8', 'Pz']
+- **Occipital**: ['O1', 'O2', 'Oz']
+- **Temporal**: ['T7', 'T8', 'TP9', 'TP10']
+
+---
+
+## Individual Classifiers
 
 ### 1. CSP Classifier (`classification/models/csp/csp_classifier.py`)
 - **Method**: Common Spatial Patterns with LDA/SVM/Random Forest

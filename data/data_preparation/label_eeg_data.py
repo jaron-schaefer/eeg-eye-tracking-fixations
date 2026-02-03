@@ -77,7 +77,7 @@ def save_training_npz(subject: str, pre_ms: int, post_ms: int,
     )
 
 
-def label_eeg_data(pre_window_ms: int = PRE_WINDOW_MS, post_window_ms: int = POST_WINDOW_MS, subjects: list[str] = SUBJECTS):
+def label_eeg_data(subjects: list[str] = SUBJECTS, pre_window_ms: int = PRE_WINDOW_MS, post_window_ms: int = POST_WINDOW_MS):
     for subject in tqdm(subjects, desc="Processing subjects"):
         fix_df = load_fixations(subject)
         raw, data, times, channel_names = DataLoader.load_eeg(subject)

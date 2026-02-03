@@ -217,7 +217,7 @@ class CBraModClassifier(BaseEEGClassifier):
                 optimizer.zero_grad()
                 
                 if scaler is not None:
-                    with torch.cuda.amp.autocast():
+                    with torch.amp.autocast('cuda'):
                         logits = self.model(X_batch).squeeze()
                         loss = criterion(logits, y_batch)
                     scaler.scale(loss).backward()
@@ -245,7 +245,7 @@ class CBraModClassifier(BaseEEGClassifier):
                     X_batch = X_batch.to(self.device)
                     
                     if scaler is not None:
-                        with torch.cuda.amp.autocast():
+                        with torch.amp.autocast('cuda'):
                             logits = self.model(X_batch).squeeze()
                     else:
                         logits = self.model(X_batch).squeeze()

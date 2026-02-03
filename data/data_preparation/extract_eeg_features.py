@@ -1,13 +1,16 @@
-from typing import List, Tuple
 import numpy as np
-import pandas as pd
-from tqdm import tqdm
 import pyeeg
+import pandas as pd
+import warnings
+from tqdm import tqdm
 from pathlib import Path
 from scipy import stats
+from typing import List, Tuple
 
-from data.data_configs import EEG_CHANNEL_NAMES, FEATURES_DIR, SUBJECTS, DEFAULT_EEG_CHANNELS
+from data.data_configs import EEG_CHANNEL_NAMES, FEATURES_DIR, SUBJECTS, EEG_CHANNEL_NAMES
 from data.data_loader import DataLoader
+
+warnings.filterwarnings("ignore", category=FutureWarning)
 
 ADVANCED_FEATURE_NAMES = [
     'delta_power', 'theta_power', 'alpha_power', 'beta_power', 'gamma_power',
@@ -125,15 +128,16 @@ def extract_features_for_subject(data: np.ndarray, sampling_rate: float, ch_name
 
 
 
-def extract_and_save_subject_features(subject: str, channels: List[str], mode: str = 'advanced') -> Tuple[pd.DataFrame, np.ndarray, Path]:
+def extract_and_save_subject_features(subject: str, channels: List[str]) -> Tuple[pd.DataFrame, np.ndarray, Path]:
     """
     Extract features for a single subject and save to CSV.
     """
-    X, y, channel_names, stimulus_summary, metadata = DataLoader.load_subject_labeled_eeg(subject, channels)
+    X, y, channel_names, stimulus_summary, metadata = DataLoader.load_subject_labeled_eeg(subject, channels = channels)
     sfreq = float(metadata['sampling_rate'])
-    all_features, all_names = extract_features_for_subject(X, sfreq, channel_names, mode=mode)
+    all_features, all_names = extract_features_for_subject(X, sfreq, channel_names, mode="advanced")
     # Save in subfolder by mode ("simple" or "advanced")
-    output_dir = FEATURES_DIR / mode / subject
+    output_dir = FEATURES_DIR / "advanced" / subject
+
     output_dir.mkdir(parents=True, exist_ok=True)
     df = pd.DataFrame(all_features, columns=all_names)
     df['label'] = np.squeeze(y)
@@ -143,12 +147,12 @@ def extract_and_save_subject_features(subject: str, channels: List[str], mode: s
 
 
 
-def extract_and_save_features_for_subjects(subjects: List[str] = SUBJECTS, channels: List[str] = EEG_CHANNEL_NAMES, mode: str = 'advanced') -> None:
+def extract_and_save_features_for_subjects(subjects: List[str] = SUBJECTS) -> None:
     """
     Extract and save features for a list of subjects.
     """
-    for subject in sorted(subjects):
+    for subject in tqdm(sorted(subjects)):
         try:
-            df, labels, output_path = extract_and_save_subject_features(subject, channels, mode=mode)
+            df, labels, output_path = extract_and_save_subject_features(subject, EEG_CHANNEL_NAMES)
         except Exception as e:
             print(f"  Error processing {subject}: {e}")

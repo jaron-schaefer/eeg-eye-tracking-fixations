@@ -14,6 +14,28 @@ from data.data_configs import *
 
 
 class DataLoader:
+    
+    def __init__(self, data_path=None):
+        """Initialize DataLoader with optional data path override."""
+        self.data_path = Path(data_path) if data_path else None
+    
+    def _get_path(self, default_path):
+        """Get path, using override if available."""
+        if self.data_path:
+            # Convert relative paths to be relative to data_path
+            if isinstance(default_path, str):
+                default_path = Path(default_path)
+            if default_path.is_absolute():
+                # For absolute paths, try to find equivalent under data_path
+                relative_parts = default_path.parts
+                if 'data' in relative_parts:
+                    idx = relative_parts.index('data')
+                    return self.data_path / Path(*relative_parts[idx+1:])
+                else:
+                    return self.data_path / default_path.name
+            else:
+                return self.data_path / default_path
+        return default_path
 
     @classmethod
     def load_eeg(cls, subject: str, eeg_dir=EEG_DIR):
@@ -62,55 +84,98 @@ class DataLoader:
         big_df = pd.concat(df_list, ignore_index=True)
         return big_df, stimulus_summary
 
-    @classmethod
     def load_features(
-        cls,
+        self,
         subjects: Union[str, Sequence[str]],
-        mode: str = "advanced",
-        channels: List[str] = EEG_CHANNEL_NAMES
+        mode: str = "advanced", 
+        channels: Optional[List[str]] = None
     ) -> Tuple[np.ndarray, np.ndarray, List[str], List[str], Optional[pd.Series]]:
-
+        """Load EEG features with optional channel filtering.
+        
+        Args:
+            subjects: Subject ID(s) to load
+            mode: 'simple' or 'advanced' features
+            channels: List of channel names to filter by (e.g., ['P7', 'F3']). 
+                     If None, load all channels.
+        
+        Returns:
+            X: Feature matrix
+            y: Labels
+            feature_names: Names of selected features
+            subject_ids: Subject ID for each sample
+            stimulus_summary: Stimulus summary if available
+        """
         subj_list = [subjects] if isinstance(subjects, str) else list(subjects)
         X_blocks = []
         y_blocks = []
         subject_ids = []
         feature_names = None
         stimulus_summary = None
+        
         for subj in subj_list:
-            feat_path = Path(FEATURES_DIR) / mode / subj / "features.csv"
+            # Use path override if available
+            features_dir = self._get_path(FEATURES_DIR)
+            feat_path = Path(features_dir) / mode / subj / "features.csv"
             df = pd.read_csv(feat_path)
+            
+            # Filter features by channels if specified
             if channels is not None:
-                # Select all columns where the channel name appears anywhere in the feature name (e.g., 'P7' in 'min_P7' or 'P7_min')
-                selected_cols = [col for col in df.columns if any((ch in col or col in ch) for ch in channels)]
-                # Always include label if present
-                if 'label' in df.columns and 'label' not in selected_cols:
-                    selected_cols.append('label')
+                # Select columns where feature name starts with channel name + '_'
+                selected_cols = []
+                for col in df.columns:
+                    # Skip non-feature columns
+                    if col in ['label', 'stimulus_summary']:
+                        continue
+                    # Check if column starts with any of the specified channels
+                    for ch in channels:
+                        if col.startswith(f'{ch}_'):
+                            selected_cols.append(col)
+                            break
+                
+                # Always include label and stimulus_summary if present
+                for meta_col in ['label', 'stimulus_summary']:
+                    if meta_col in df.columns and meta_col not in selected_cols:
+                        selected_cols.append(meta_col)
+                        
                 df = df[selected_cols]
+                print(f"Filtered to {len(selected_cols)-1} features for channels {channels} (subject {subj})")
+            
+            # Handle stimulus summary
             if 'stimulus_summary' in df.columns:
                 if stimulus_summary is None:
                     stimulus_summary = df['stimulus_summary']
+                df = df.drop(columns=['stimulus_summary'])
+            
+            # Extract features and labels
             if 'label' in df.columns:
                 X = df.drop(columns=["label"]).values
                 y = df["label"].values
                 current_feature_names = list(df.drop(columns=["label"]).columns)
+            else:
+                X = df.values
+                y = None
+                current_feature_names = list(df.columns)
 
             if feature_names is None:
                 feature_names = current_feature_names
+            elif feature_names != current_feature_names:
+                print(f"Warning: Feature names mismatch for subject {subj}")
+                
             X_blocks.append(X)
             if y is not None:
                 y_blocks.append(y)
             subject_ids.extend([subj] * len(X))
+        
         X_out = np.vstack(X_blocks)
         y_out = np.concatenate(y_blocks) if y_blocks else None
         return X_out, y_out, feature_names, subject_ids, stimulus_summary
     
     
-    @classmethod
     def load_et_features(
-        cls,
+        self,
         subjects: Union[str, Sequence[str]],
     ) -> Tuple[np.ndarray, np.ndarray, List[str], List[str], Optional[pd.Series]]:
-
+        """Load eye tracking features."""
         subj_list = [subjects] if isinstance(subjects, str) else list(subjects)
         X_blocks = []
         y_blocks = []
@@ -118,7 +183,9 @@ class DataLoader:
         feature_names = None
         stimulus_summary = None
         for subj in subj_list:
-            feat_path = Path(FEATURES_DIR) / "et_features" / f"{subj}_features.csv"
+            # Use path override if available  
+            features_dir = self._get_path(FEATURES_DIR)
+            feat_path = Path(features_dir) / "et_features" / f"{subj}_features.csv"
             if not feat_path.exists():
                 print(f"Warning: Feature file not found for {subj}: {feat_path}")
                 continue
@@ -410,26 +477,3 @@ class DataLoader:
             print(f"  Label {label}: {count} samples ({proportion:.2%})")
         
         return X_combined, y_combined, np.array(all_subjects), stimulus_combined
-
-
-    # ============================================================================
-    # USAGE EXAMPLES
-    # ============================================================================
-
-    """
-    # Load only EEG data
-    from config import SUBJECTS, DEFAULT_EEG_CHANNELS
-    X, y, subjects = load_eeg_data(SUBJECTS, DEFAULT_EEG_CHANNELS)
-
-    # Load EEG and stimulus together
-    X, y, subjects, stimulus = load_eeg_data_with_stimulus(SUBJECTS, DEFAULT_EEG_CHANNELS)
-
-    # Then use with split functions
-    from data_split import split_normal
-    X_train, X_val, X_test, y_train, y_val, y_test, stim_train, stim_val, stim_test = \
-        split_normal(X, y, stimulus_summary=stimulus)
-    """
-
-
-
-
