@@ -111,14 +111,24 @@ def evaluate_all_models(subjects=None, selected_channels=None, split_strategy='n
     
     print(f"=== EVALUATING ALL MODELS ({split_strategy.upper()} SPLIT) ===")
     print(f"Subjects: {subjects}")
-    print(f"Using parameters from: {param_file}")
-    print("Using balanced class weights for all models")
+    print(f"Results saved after each model (no data loss)")
     
-    evaluation_results = {}
+    # Load existing evaluation results or start fresh
+    eval_file = results_path / f"evaluation_results_{split_strategy}_latest.json"
+    if eval_file.exists():
+        with open(eval_file, 'r') as f:
+            evaluation_results = json.load(f)
+        print(f"📋 Loaded existing results: {len(evaluation_results)} models")
+    else:
+        evaluation_results = {}
     
-    for model_name, param_info in optimal_params.items():
+    for i, (model_name, param_info) in enumerate(optimal_params.items(), 1):
+        if model_name in evaluation_results:
+            print(f"⏭️  Skipping {model_name} (already evaluated)")
+            continue
+            
         try:
-            print(f"\\nEvaluating {model_name}...")
+            print(f"\\n🔄 Evaluating {model_name} ({i}/{len(optimal_params)})...")
             params = param_info['params']
             
             test_results = evaluate_single_model(model_name, params, subjects, selected_channels)
@@ -128,11 +138,16 @@ def evaluate_all_models(subjects=None, selected_channels=None, split_strategy='n
             print(f"  Balanced Accuracy: {test_results['balanced_accuracy']:.4f}")
             print(f"  F1-Macro: {test_results['f1_macro']:.4f}")
             
-            # Cleanup after each model
+            # Save immediately after each model
+            with open(eval_file, 'w') as f:
+                json.dump(evaluation_results, f, indent=2, default=str)
+            print(f"  💾 Saved to {eval_file.name}")
+            
+            # Cleanup after each model to save CPU RAM
             aggressive_cleanup()
             
         except Exception as e:
-            print(f"ERROR evaluating {model_name}: {e}")
+            print(f"❌ ERROR evaluating {model_name}: {e}")
             aggressive_cleanup()
             continue
     

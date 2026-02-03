@@ -66,7 +66,7 @@ class EEGNetClassifier(BaseEEGClassifier):
         return X_train_prep, y_train_prep, X_val_prep, y_val_prep, X_test_prep, y_test_prep
     
     def train(self, X_train, y_train, X_val, y_val, X_test=None, y_test=None, 
-              lr=1e-3, epochs=100, batch_size=64, subject_ids=None, verbose=True):
+              lr=5e-4, epochs=100, batch_size=64, subject_ids=None, verbose=True):
         """Train EEGNet classifier"""
         if verbose:
             print(f"\\n[EEGNet Training] LR: {lr}, Epochs: {epochs}, Dropout: {self.dropoutRate}")
@@ -88,22 +88,36 @@ class EEGNetClassifier(BaseEEGClassifier):
                            dropoutRate=self.dropoutRate, kernLength=self.kernLength,
                            F1=self.F1, D=self.D, F2=self.F2, **self.model_params)
 
-        # Calculate class weights for imbalanced data
+        # Calculate proper balanced class weights for imbalanced data
         class_counts = np.bincount(y_train_prep.astype(int))
         total_samples = len(y_train_prep)
-        class_weight = {0: total_samples / (2 * class_counts[0]),
-                       1: total_samples / (2 * class_counts[1])}
+        
+        # Balanced class weights (more aggressive for minority class)
+        class_weight = {
+            0: total_samples / (2 * class_counts[0]),
+            1: total_samples / (2 * class_counts[1])
+        }
+        
+        if verbose:
+            print(f"  Class distribution: {class_counts}")
+            print(f"  Class weights: {class_weight}")
+            minority_boost = class_weight[1] / class_weight[0]
+            print(f"  Minority class boost: {minority_boost:.2f}x")
 
-        # Compile with binary crossentropy and class weights
+        # Compile with binary crossentropy, AUC metric, and lower learning rate
         self.model.compile(
             loss='binary_crossentropy',
-            optimizer=tf.keras.optimizers.Adam(learning_rate=lr),
-            metrics=['accuracy']
+            optimizer=tf.keras.optimizers.Adam(learning_rate=lr, clipnorm=1.0),  # Add gradient clipping
+            metrics=['accuracy', tf.keras.metrics.AUC(name='auc')]
         )
         
-        # Train with early stopping
-        callbacks = [EarlyStopping(monitor='val_loss', patience=20, restore_best_weights=True)]
+        # Train with early stopping (monitor AUC to prevent collapse)
+        callbacks = [
+            EarlyStopping(monitor='val_auc', patience=15, restore_best_weights=True, mode='max'),
+            EarlyStopping(monitor='val_loss', patience=25, restore_best_weights=True, mode='min')
+        ]
         
+        # Train model
         history = self.model.fit(
             X_train_prep, y_train_prep,
             validation_data=(X_val_prep, y_val_prep),
@@ -113,6 +127,15 @@ class EEGNetClassifier(BaseEEGClassifier):
             callbacks=callbacks,
             verbose=1 if verbose else 0
         )
+        
+        # Check for model collapse
+        val_probs = self.model.predict(X_val_prep, verbose=0).flatten()
+        prob_range = np.max(val_probs) - np.min(val_probs)
+        
+        if verbose:
+            print(f"  Validation prob range: {prob_range:.4f} (>0.3 is healthy)")
+            if prob_range < 0.1:
+                print(f"  ⚠️  WARNING: Model might be collapsing (range < 0.1)")
         
         self.is_trained = True
         
