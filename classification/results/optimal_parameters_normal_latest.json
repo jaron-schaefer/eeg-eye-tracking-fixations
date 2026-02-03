@@ -1,0 +1,21 @@
+{
+  "eegnet": {
+    "params": {
+      "D": 2,
+      "F1": 8,
+      "F2": 16,
+      "dropoutRate": 0.2,
+      "kernLength": 64
+    },
+    "score": 0.5
+  },
+  "features_rf": {
+    "params": {
+      "max_depth": 20,
+      "min_samples_leaf": 1,
+      "min_samples_split": 2,
+      "n_estimators": 100
+    },
+    "score": 0.5
+  }
+}

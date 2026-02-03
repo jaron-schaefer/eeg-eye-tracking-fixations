@@ -29,11 +29,12 @@ from data.data_loader import DataLoader
 from data.data_configs import CBRAMOD_CHANNELS, SUBJECTS, DEFAULT_EEG_CHANNELS
 
 def get_data_path():
-    """Get data path - for Colab, data is next to repository folder."""
+    """Get data path - for Colab, data folders are at same level as project."""
     current_dir = Path(__file__).parent.absolute()
-    if '/content/' in str(current_dir):
+    if '/content/' in str(current_dir):  # Running in Colab
+        # Data folders are at /content/drive/MyDrive/eye-eeg/ (same level as project)
         return Path('/content/drive/MyDrive/eye-eeg')
-    else:
+    else:  # Running locally
         return current_dir.parent / 'data' / 'data'
 
 def get_results_path():
@@ -129,30 +130,78 @@ DATA_SPLIT_STRATEGIES = {
     'leave_one_out': {'test_size': 0.15, 'val_size': 0.15}
 }
 
-def load_model_data(model_name, subjects, selected_channels=None, split_strategy='normal'):
-    """Load and split data for a specific model with CPU RAM optimization"""
+def load_model_data_advanced(model_name, subjects, selected_channels=None, split_strategy='normal'):
+    """Load and split data for a specific model with CPU RAM optimization (for optimization use)"""
     data_loader = DataLoader(get_data_path())
     
     if model_name in ['eegnet', 'cbramod', 'csp']:
         if selected_channels is None:
             selected_channels = CBRAMOD_CHANNELS if model_name == 'cbramod' else DEFAULT_EEG_CHANNELS
         
-        # Load EEG data with float32 for CPU RAM efficiency
-        X, y = data_loader.load_labeled_eeg_data(subjects=subjects, 
-                                                 channels=selected_channels,
-                                                 dtype=np.float32)
+        # Handle different path structures for Colab vs local
+        data_path = data_loader.data_path
+        if '/content/' in str(Path.cwd()):  # Running in Colab
+            labeled_eeg_dir = data_path / 'labeled_eeg_data'
+        else:  # Running locally
+            labeled_eeg_dir = data_path / 'labeled_eeg_data'
+            
+        X, y, subjects_loaded = data_loader.load_labeled_eeg_data(subjects=subjects, 
+                                                                  channels=selected_channels,
+                                                                  labeled_eeg_data_dir=labeled_eeg_dir)
+        X = X.astype(np.float32)  # Convert after loading
     
     elif model_name.startswith('features_'):
-        # Load advanced features with float32
-        X, y = data_loader.load_features(subjects=subjects, 
-                                         feature_type='advanced',
-                                         dtype=np.float32)
+        # Handle different path structures for Colab vs local
+        data_path = data_loader.data_path
+        if '/content/' in str(Path.cwd()):  # Running in Colab
+            features_base_dir = data_path / 'advanced'
+        else:  # Running locally
+            features_base_dir = data_path / 'features' / 'advanced'
+            
+        X, y = [], []
+        
+        # Load features manually for correct path handling
+        for subject in subjects:
+            feat_path = features_base_dir / subject / 'features.csv'
+            if feat_path.exists():
+                import pandas as pd
+                df = pd.read_csv(feat_path)
+                # Extract features (exclude label and stimulus_summary)
+                feature_cols = [col for col in df.columns if col not in ['label', 'stimulus_summary']]
+                X.append(df[feature_cols].values.astype(np.float32))
+                y.append(df['label'].values)
+        
+        if not X:
+            raise FileNotFoundError(f"No feature files found for subjects {subjects}")
+        
+        X = np.vstack(X)
+        y = np.concatenate(y)
     
     elif model_name.startswith('et_'):
-        # Load ET features with float32
-        X, y = data_loader.load_features(subjects=subjects, 
-                                         feature_type='et',
-                                         dtype=np.float32)
+        # Handle different path structures for Colab vs local
+        data_path = data_loader.data_path
+        if '/content/' in str(Path.cwd()):  # Running in Colab
+            et_features_dir = data_path / 'et_features'
+        else:  # Running locally
+            et_features_dir = data_path / 'features' / 'et_features'
+            
+        X, y = [], []
+        
+        for subject in subjects:
+            feat_path = et_features_dir / f'{subject}_features.csv'
+            if feat_path.exists():
+                import pandas as pd
+                df = pd.read_csv(feat_path)
+                # Extract features (exclude label and any other non-numeric columns)
+                feature_cols = [col for col in df.columns if col not in ['label', 'stimulus_summary']]
+                X.append(df[feature_cols].values.astype(np.float32))
+                y.append(df['label'].values)
+        
+        if not X:
+            raise FileNotFoundError(f"No ET feature files found for subjects {subjects}")
+        
+        X = np.vstack(X)
+        y = np.concatenate(y)
     
     # Print data info for CPU RAM monitoring
     print(f"  Data shape: {X.shape}, dtype: {X.dtype}")
@@ -226,13 +275,12 @@ def optimize_single_model(model_name, subjects, max_trials, split_strategy='norm
     print(f"  Loading data for {model_name}...")
     
     # Load data with CPU RAM optimization
-    X, y = load_model_data(model_name, subjects, selected_channels, split_strategy)[:2]
-    X_train, X_val, y_train, y_val = train_test_split(
-        X, y, test_size=0.25, random_state=42, stratify=y
+    X_train, X_val, X_test, y_train, y_val, y_test = load_model_data_advanced(
+        model_name, subjects, selected_channels, split_strategy
     )
     
-    # Clean up original data to save CPU RAM
-    del X, y
+    # Clean up test data since we don't need it for optimization
+    del X_test, y_test
     aggressive_cleanup()
     
     print(f"  Training set: {X_train.shape}, Validation: {X_val.shape}")
@@ -375,7 +423,7 @@ def full_optimization():
 
 def test_all_models():
     """Test model creation and data loading without training (for debugging)"""
-    subjects = ['P10', 'P16']
+    subjects = ['P10', 'P16']  # These subjects have data available
     return optimize_all_models(subjects, max_trials=1, split_strategies=['normal'], test_mode=True)
 
 if __name__ == "__main__":

@@ -21,7 +21,7 @@ from classification.models.features.et_feature_classifier import ETFeatureClassi
 
 # Import from optimization runner
 from classification.model_optimization_runner import (
-    get_data_path, get_results_path, load_model_data, aggressive_cleanup
+    get_data_path, get_results_path, load_model_data_advanced, aggressive_cleanup
 )
 from data.data_configs import SUBJECTS
 
@@ -29,7 +29,11 @@ def evaluate_single_model(model_name, params, subjects, selected_channels=None):
     """Evaluate single model with given parameters"""
     
     # Load data with train/test split
-    X, y = load_model_data(model_name, subjects, selected_channels)
+    X_train, X_val, X_test, y_train, y_val, y_test = load_model_data_advanced(model_name, subjects, selected_channels)
+    
+    # Combine train and val for evaluation (since we're not optimizing)
+    X = np.vstack([X_train, X_val])
+    y = np.concatenate([y_train, y_val])
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
     
     # Create model with optimal parameters (always with balanced class weights)
