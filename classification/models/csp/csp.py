@@ -37,14 +37,16 @@ class CSPClassifier:
             clf = LinearDiscriminantAnalysis(**self.kwargs)
             
         elif self.clf_type == 'rf':
-            # Regularized Random Forest (Depth limited to 5)
+            # Regularized Random Forest with class weighting for imbalance
+            class_weight = self.kwargs.get('class_weight', 'balanced')  # Default to balanced
             clf = RandomForestClassifier(
                 n_estimators=self.n_estimators, 
                 max_depth=self.max_depth,        # Limit depth to stop memorization
                 max_features='sqrt',
+                class_weight=class_weight,       # Handle class imbalance
                 random_state=self.seed,
                 n_jobs=-1,
-                **self.kwargs
+                **{k:v for k,v in self.kwargs.items() if k != 'class_weight'}  # Avoid duplicate
             )
         else:
             raise ValueError("clf_type must be 'lda' or 'rf'")

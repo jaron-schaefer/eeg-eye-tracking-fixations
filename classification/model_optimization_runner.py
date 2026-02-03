@@ -1,21 +1,19 @@
 """
-Model Optimization Pipeline
+Model Optimization Runner
 
-Three functions:
-1. optimize_all_models() - Find best parameters for each model
-2. evaluate_all_models() - Train and test with optimal parameters  
-3. test_channel_configurations() - Test different channel groups
+Optimized for speed and minimal RAM usage:
+- Always uses balanced class weights (no optimization of class_weight)
+- Aggressive memory cleanup after each model
+- Loads data fresh for each model to minimize RAM
 """
 
 import numpy as np
 import pandas as pd
 import json
-import pickle
 import gc
 import torch
 from pathlib import Path
 from sklearn.model_selection import ParameterGrid, train_test_split
-from sklearn.metrics import balanced_accuracy_score, f1_score, accuracy_score
 
 # Import models
 from classification.models.eeg_net.eegnet_classifier import EEGNetClassifier
@@ -44,8 +42,7 @@ def get_results_path():
     results_dir.mkdir(exist_ok=True)
     return results_dir
 
-
-# Model parameter grids - reduced for efficiency but educated choices
+# Model parameter grids - optimized for speed (always balanced class weights)
 PARAM_GRIDS = {
     'eegnet': {
         'dropoutRate': [0.3, 0.5],  # Most common effective values
@@ -63,65 +60,50 @@ PARAM_GRIDS = {
         'n_components': [4, 6, 8, 10],  # Reduced but covers key range
         'clf_type': ['lda', 'rf'],  # Only supported types
         'reg': [0.01, 0.1, None]  # Simplified regularization (correct parameter name)
+        # class_weight always 'balanced' for RF, not optimized
     },
     'features_rf': {
         'n_estimators': [100, 200],  # Focus on proven values
         'max_depth': [20, None],     # Most effective options
         'min_samples_split': [2, 5], # Key values
         'min_samples_leaf': [1, 2]   # Essential options
+        # class_weight always 'balanced', not optimized
     },
     'features_svm': {
         'C': [0.1, 1.0, 10.0],      # Core C values
         'gamma': ['scale', 0.01],    # Most effective options
         'kernel': ['rbf', 'linear']   # Key kernels
+        # class_weight always 'balanced', not optimized
     },
     'et_rf': {
         'n_estimators': [100, 200],  # Proven values
         'max_depth': [20, None],     # Most effective
         'min_samples_split': [2, 5]  # Key options
+        # class_weight always 'balanced', not optimized
     },
     'et_svm': {
         'C': [0.1, 1.0, 10.0],      # Core values
         'gamma': ['scale', 0.01],    # Most effective
         'kernel': ['rbf', 'linear']   # Key kernels
+        # class_weight always 'balanced', not optimized
     }
 }
 
 # Data splitting strategies
 DATA_SPLIT_STRATEGIES = {
     'normal': {'test_size': 0.2, 'val_size': 0.25},
-    'leave_one_out': {'test_size': 0.15, 'val_size': 0.15}  # Smaller splits for more training data
+    'leave_one_out': {'test_size': 0.15, 'val_size': 0.15}
 }
 
-# Global data cache to avoid reloading within single optimization run
-_DATA_CACHE = {}
-
-def clear_data_cache():
-    """Clear the global data cache and force garbage collection."""
-    global _DATA_CACHE
-    _DATA_CACHE.clear()
-    # Force garbage collection
-    gc.collect()
-    # Clear CUDA cache if available
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
-    print("Data cache cleared and memory freed.")
-
-def cleanup_memory():
-    """Clean up memory after each model evaluation."""
+def aggressive_cleanup():
+    """Aggressive memory cleanup to minimize RAM usage."""
     gc.collect()
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
+        torch.cuda.synchronize()  # Wait for GPU operations to finish
 
-def load_model_data(model_name, subjects, selected_channels=None, use_cache=True):
-    """Load data for specific model type with caching for RAM efficiency
-    """
-    
-    # Create cache key
-    cache_key = f"{model_name}_{'-'.join(subjects)}_{selected_channels}"
-    
-    if use_cache and cache_key in _DATA_CACHE:
-        return _DATA_CACHE[cache_key]
+def load_model_data(model_name, subjects, selected_channels=None):
+    """Load data for specific model type - loads fresh data each time for minimal RAM usage"""
     
     # Get data path (adjusts for Colab environment)
     data_path = get_data_path()
@@ -141,9 +123,7 @@ def load_model_data(model_name, subjects, selected_channels=None, use_cache=True
     elif model_name.startswith('features_'):
         # EEG features with channel filtering support
         data_loader = DataLoader(data_path=str(data_path))
-        # selected_channels should already be channel names (strings)
-        channel_names = selected_channels  # No conversion needed
-        
+        channel_names = selected_channels
         X, y, _, _, _ = data_loader.load_features(subjects, mode="advanced", channels=channel_names)
         
     elif model_name.startswith('et_'):
@@ -153,26 +133,14 @@ def load_model_data(model_name, subjects, selected_channels=None, use_cache=True
         
     else:
         raise ValueError(f"Unknown model type: {model_name}")
-    
-    # Cache the data if using cache
-    if use_cache:
-        _DATA_CACHE[cache_key] = (X, y)
         
     return X, y
 
 def optimize_single_model(model_name, subjects, max_trials=10, split_strategy='normal', test_mode=False):
-    """Optimize parameters for one model
-    
-    Args:
-        model_name: Name of the model to optimize
-        subjects: List of subject IDs
-        max_trials: Maximum number of parameter combinations to try
-        split_strategy: Data split strategy to use
-        test_mode: If True, only test model creation without training
-    """
+    """Optimize parameters for one model with aggressive memory management"""
     print(f"Optimizing {model_name} with {split_strategy} split...")
     
-    # Load data once
+    # Load data fresh for this model
     X, y = load_model_data(model_name, subjects, CBRAMOD_CHANNELS)
     
     # Get split sizes based on strategy
@@ -198,21 +166,34 @@ def optimize_single_model(model_name, subjects, max_trials=10, split_strategy='n
     
     for params in param_combinations:
         try:
-            # Create model
+            # Create model with balanced class weights
             if model_name == 'eegnet':
                 model = EEGNetClassifier(**params)
             elif model_name == 'cbramod':
                 model = CBraModClassifier(**params)
             elif model_name == 'csp':
-                model = CSPClassifier(**params)
+                # Always use balanced class weights for RF
+                if 'clf_type' in params and params['clf_type'] == 'rf':
+                    params_with_weights = {**params, 'class_weight': 'balanced'}
+                else:
+                    params_with_weights = params
+                model = CSPClassifier(**params_with_weights)
             elif model_name == 'features_rf':
-                model = FeatureClassifier(model_type='rf', **{k:v for k,v in params.items() if k != 'model_type'})
+                # Always use balanced class weights
+                rf_params = {**{k:v for k,v in params.items() if k != 'model_type'}, 'class_weight': 'balanced'}
+                model = FeatureClassifier(model_type='rf', **rf_params)
             elif model_name == 'features_svm':
-                model = FeatureClassifier(model_type='svm', **{k:v for k,v in params.items() if k != 'model_type'})
+                # Always use balanced class weights
+                svm_params = {**{k:v for k,v in params.items() if k != 'model_type'}, 'class_weight': 'balanced'}
+                model = FeatureClassifier(model_type='svm', **svm_params)
             elif model_name == 'et_rf':
-                model = ETFeatureClassifier(model_type='rf', **{k:v for k,v in params.items() if k != 'model_type'})
+                # Always use balanced class weights
+                rf_params = {**{k:v for k,v in params.items() if k != 'model_type'}, 'class_weight': 'balanced'}
+                model = ETFeatureClassifier(model_type='rf', **rf_params)
             elif model_name == 'et_svm':
-                model = ETFeatureClassifier(model_type='svm', **{k:v for k,v in params.items() if k != 'model_type'})
+                # Always use balanced class weights
+                svm_params = {**{k:v for k,v in params.items() if k != 'model_type'}, 'class_weight': 'balanced'}
+                model = ETFeatureClassifier(model_type='svm', **svm_params)
             
             if test_mode:
                 # Just test model creation and data shape compatibility
@@ -220,49 +201,42 @@ def optimize_single_model(model_name, subjects, max_trials=10, split_strategy='n
                 print(f"  ✓ Data shape: {X_train.shape}, Labels: {y_train.shape}")
                 score = 0.5  # Dummy score for test mode
             else:
-                # Train and evaluate - free memory after each trial
+                # Train and evaluate
                 results = model.train(X_train, y_train, X_val, y_val)
-                
-                if 'validation' in results:
-                    score = results['validation']['balanced_accuracy']
-                else:
-                    score = results['test']['balanced_accuracy']
+                score = results['balanced_acc']
                 
             if score > best_score:
                 best_score = score
                 best_params = params.copy()
                 
-            # Clean up memory after each trial
+            # Aggressive memory cleanup after each trial
             del model
             if not test_mode:
                 del results
-            cleanup_memory()
+            aggressive_cleanup()
                 
         except Exception as e:
             print(f"  Failed with {params}: {e}")
-            cleanup_memory()  # Clean up even on failure
+            # Force cleanup even on failure
+            aggressive_cleanup()
             continue
     
     print(f"  Best {model_name}: {best_score:.4f} with {best_params}")
+    
+    # Clean up data variables to free memory
+    del X, y, X_train, X_val, y_train, y_val
+    aggressive_cleanup()
+    
     return best_params, best_score
 
-def optimize_all_models(subjects=None, max_trials=15, split_strategies=['normal', 'leave_one_out'], test_mode=False):
-    """
-    Find optimal parameters for all models and save to file
-    
-    Args:
-        subjects: List of subject IDs
-        max_trials: Maximum number of parameter combinations per model
-        split_strategies: List of data split strategies
-        test_mode: If True, only test model creation without training
-    """
+def optimize_all_models(subjects=None, max_trials=15, split_strategies=['normal'], test_mode=False):
+    """Find optimal parameters for all models and save to file - optimized for speed and RAM"""
     if subjects is None:
         subjects = SUBJECTS[:5]  # Use subset for optimization
     
-    # Create results directory in classification folder
     results_path = get_results_path()
     
-    print("=== OPTIMIZING ALL MODELS ===")
+    print("=== OPTIMIZING ALL MODELS (BALANCED CLASS WEIGHTS) ===")
     print(f"Subjects: {subjects}")
     print(f"Max trials per model: {max_trials}")
     print(f"Split strategies: {split_strategies}")
@@ -288,12 +262,12 @@ def optimize_all_models(subjects=None, max_trials=15, split_strategies=['normal'
                     'score': best_score
                 }
                 
-                # Clear cache periodically to manage RAM
-                if len(optimal_params) % 3 == 0:
-                    clear_data_cache()
+                # Aggressive cleanup after each model
+                aggressive_cleanup()
                     
             except Exception as e:
                 print(f"ERROR with {model_name}: {e}")
+                aggressive_cleanup()
                 continue
         
         all_results[strategy] = optimal_params
@@ -321,8 +295,8 @@ def optimize_all_models(subjects=None, max_trials=15, split_strategies=['normal'
     with open(combined_file, 'w') as f:
         json.dump(all_results, f, indent=2, default=str)
     
-    # Clear cache at the end
-    clear_data_cache()
+    # Final memory cleanup
+    aggressive_cleanup()
     
     # Print summary for all strategies
     print(f"\\n{'='*60}")
@@ -335,168 +309,19 @@ def optimize_all_models(subjects=None, max_trials=15, split_strategies=['normal'
     
     return all_results
 
-def evaluate_single_model(model_name, params, subjects, selected_channels=None):
-    """Evaluate single model with given parameters
-    """
-    
-    # Load data with train/test split
-    X, y = load_model_data(model_name, subjects, selected_channels)
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
-    
-    # Create model with optimal parameters
-    if model_name == 'eegnet':
-        model = EEGNetClassifier(**params)
-    elif model_name == 'cbramod':
-        model = CBraModClassifier(**params)
-    elif model_name == 'csp':
-        model = CSPClassifier(**params)
-    elif model_name == 'features_rf':
-        model = FeatureClassifier(model_type='rf', **params)
-    elif model_name == 'features_svm':
-        model = FeatureClassifier(model_type='svm', **params)
-    elif model_name == 'et_rf':
-        model = ETFeatureClassifier(model_type='rf', **params)
-    elif model_name == 'et_svm':
-        model = ETFeatureClassifier(model_type='svm', **params)
-    
-    # Train model - use a small validation set for training monitoring
-    X_train_split, X_val_split, y_train_split, y_val_split = train_test_split(
-        X_train, y_train, test_size=0.2, random_state=42, stratify=y_train
-    )
-    
-    try:
-        results = model.train(X_train_split, y_train_split, X_val_split, y_val_split, X_test, y_test)
-        
-        # Extract test results - try different result structures
-        if 'test' in results:
-            test_results = results['test']
-        elif 'validation' in results:
-            # If no test results, use validation and manually evaluate on test
-            y_pred = model.predict(X_test)
-            test_results = {
-                'accuracy': accuracy_score(y_test, y_pred),
-                'balanced_accuracy': balanced_accuracy_score(y_test, y_pred),
-                'f1_macro': f1_score(y_test, y_pred, average='macro')
-            }
-        else:
-            # Fallback to manual evaluation
-            y_pred = model.predict(X_test)
-            test_results = {
-                'accuracy': accuracy_score(y_test, y_pred),
-                'balanced_accuracy': balanced_accuracy_score(y_test, y_pred),
-                'f1_macro': f1_score(y_test, y_pred, average='macro')
-            }
-            
-    except Exception as e:
-        print(f"  Error in model training: {e}")
-        # Fallback: train without validation monitoring
-        model.fit(X_train, y_train) if hasattr(model, 'fit') else None
-        y_pred = model.predict(X_test)
-        test_results = {
-            'accuracy': accuracy_score(y_test, y_pred),
-            'balanced_accuracy': balanced_accuracy_score(y_test, y_pred),
-            'f1_macro': f1_score(y_test, y_pred, average='macro')
-        }
-    
-    return test_results
-
-def evaluate_all_models(subjects=None, selected_channels=None, split_strategy='normal'):
-    """
-    Train and evaluate all models using optimal parameters
-    """
-    if subjects is None:
-        subjects = SUBJECTS
-    
-    results_path = get_results_path()
-
-    
-    # Load optimal parameters for the specified strategy
-    param_file = results_path / f"optimal_parameters_{split_strategy}_latest.json"
-    
-    if not Path(param_file).exists():
-        raise FileNotFoundError(f"Parameter file not found: {param_file}. Run optimize_all_models() first.")
-    
-    with open(param_file, 'r') as f:
-        optimal_params = json.load(f)
-    
-    print(f"=== EVALUATING ALL MODELS ({split_strategy.upper()} SPLIT) ===")
-    print(f"Subjects: {subjects}")
-    print(f"Using parameters from: {param_file}")
-    
-    evaluation_results = {}
-    
-    for model_name, param_info in optimal_params.items():
-        try:
-            print(f"\\nEvaluating {model_name}...")
-            params = param_info['params']
-            
-            test_results = evaluate_single_model(model_name, params, subjects, selected_channels)
-            evaluation_results[model_name] = test_results
-            
-            print(f"  Accuracy: {test_results['accuracy']:.4f}")
-            print(f"  Balanced Accuracy: {test_results['balanced_accuracy']:.4f}")
-            print(f"  F1-Macro: {test_results['f1_macro']:.4f}")
-            
-        except Exception as e:
-            print(f"ERROR evaluating {model_name}: {e}")
-            continue
-    
-    # Save evaluation results with timestamp
-    from datetime import datetime
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    results_file = results_path / f"evaluation_results_{split_strategy}_{timestamp}.json"
-    latest_results = results_path / f"evaluation_results_{split_strategy}_latest.json"
-    
-    # Save timestamped and latest versions
-    with open(results_file, 'w') as f:
-        json.dump(evaluation_results, f, indent=2, default=str)
-        
-    with open(latest_results, 'w') as f:
-        json.dump(evaluation_results, f, indent=2, default=str)
-    
-    print(f"\\nEvaluation results saved to: {results_file}")
-    print(f"Latest results saved to: {latest_results}")
-    
-    # Clear cache
-    clear_data_cache()
-    
-    # Print final summary
-    print("\\n=== FINAL RESULTS ===")
-    results_df = pd.DataFrame(evaluation_results).T
-    results_df = results_df.sort_values('balanced_accuracy', ascending=False)
-    print(results_df.round(4))
-    
-    best_model = results_df.index[0]
-    best_score = results_df.iloc[0]['balanced_accuracy']
-    print(f"\\nBest Model: {best_model} (Balanced Accuracy: {best_score:.4f})")
-    
-    return evaluation_results
-
-
-
 # Simple runner functions
 def quick_optimization():
     """Quick optimization with few subjects"""
-    subjects = SUBJECTS[:3]  # Quick test
+    subjects = SUBJECTS[:3]
     return optimize_all_models(subjects, max_trials=8, split_strategies=['normal'])
 
 def full_optimization():
-    """Full optimization with all subjects and both split strategies"""
-    return optimize_all_models(SUBJECTS, max_trials=20, split_strategies=['normal', 'leave_one_out'])
-
-def quick_evaluation(split_strategy='normal'):
-    """Quick evaluation with few subjects"""
-    subjects = SUBJECTS[:3]
-    return evaluate_all_models(subjects, split_strategy=split_strategy)
-
-def full_evaluation(split_strategy='normal'):
-    """Full evaluation with all subjects"""
-    return evaluate_all_models(SUBJECTS, split_strategy=split_strategy)
+    """Full optimization with all subjects"""
+    return optimize_all_models(SUBJECTS, max_trials=20, split_strategies=['normal'])
 
 def test_all_models():
     """Test model creation and data loading without training (for debugging)"""
-    # Use subjects that actually have data
-    subjects = ['P10', 'P16']  # These were found in the data directory
+    subjects = ['P10', 'P16']
     return optimize_all_models(subjects, max_trials=1, split_strategies=['normal'], test_mode=True)
 
 def test_single_model_type(model_name):
@@ -511,20 +336,27 @@ def test_single_model_type(model_name):
         params = list(ParameterGrid(PARAM_GRIDS[model_name]))[0]
         print(f"✓ Testing parameters: {params}")
         
+        # Create model with balanced class weights
         if model_name == 'eegnet':
             model = EEGNetClassifier(**params)
         elif model_name == 'cbramod':
             model = CBraModClassifier(**params)
         elif model_name == 'csp':
+            if 'clf_type' in params and params['clf_type'] == 'rf':
+                params = {**params, 'class_weight': 'balanced'}
             model = CSPClassifier(**params)
         elif model_name == 'features_rf':
-            model = FeatureClassifier(model_type='rf', **params)
+            rf_params = {**params, 'class_weight': 'balanced'}
+            model = FeatureClassifier(model_type='rf', **rf_params)
         elif model_name == 'features_svm':
-            model = FeatureClassifier(model_type='svm', **params)
+            svm_params = {**params, 'class_weight': 'balanced'}
+            model = FeatureClassifier(model_type='svm', **svm_params)
         elif model_name == 'et_rf':
-            model = ETFeatureClassifier(model_type='rf', **params)
+            rf_params = {**params, 'class_weight': 'balanced'}
+            model = ETFeatureClassifier(model_type='rf', **rf_params)
         elif model_name == 'et_svm':
-            model = ETFeatureClassifier(model_type='svm', **params)
+            svm_params = {**params, 'class_weight': 'balanced'}
+            model = ETFeatureClassifier(model_type='svm', **svm_params)
             
         print(f"✓ Model created: {model}")
         return True
@@ -532,13 +364,3 @@ def test_single_model_type(model_name):
     except Exception as e:
         print(f"✗ Error testing {model_name}: {e}")
         return False
-
-if __name__ == "__main__":
-    # Example usage
-    print("EEG Model Optimization Pipeline")
-    print("1. Run optimize_all_models() to find best parameters")
-    print("2. Run evaluate_all_models() to test with optimal parameters")
-    
-    # Uncomment to run:
-    # optimize_all_models()
-    # evaluate_all_models()

@@ -64,6 +64,13 @@ def EEGNet(nb_classes, Chans=35, Samples=1001,
 
     dense = Dense(nb_classes, name='dense',
                   kernel_constraint=max_norm(norm_rate))(flatten)
-    softmax = Activation('softmax', name='softmax')(dense)
+    
+    # Use appropriate activation based on number of classes
+    if nb_classes == 1:
+        # Binary classification with single sigmoid output
+        output = Activation('sigmoid', name='sigmoid')(dense)
+    else:
+        # Multi-class with softmax
+        output = Activation('softmax', name='softmax')(dense)
 
-    return Model(inputs=input1, outputs=softmax)
+    return Model(inputs=input1, outputs=output)

@@ -75,22 +75,28 @@ class EEGNetClassifier(BaseEEGClassifier):
         X_train_prep, y_train_prep, X_val_prep, y_val_prep, X_test_prep, y_test_prep = self.prepare_data(
             X_train, y_train, X_val, y_val, X_test, y_test, subject_ids)
         
-        # Build model
-        nb_classes = 2
+# Build model for binary classification
+        nb_classes = 1  # Single sigmoid output for binary classification
         Chans = X_train_prep.shape[1]
         Samples = X_train_prep.shape[2]
-        
+
         # Auto-adjust kernel length
         if self.kernLength == 64 and Samples > 400:
             self.kernLength = min(250, Samples // 4)
-        
+
         self.model = EEGNet(nb_classes=nb_classes, Chans=Chans, Samples=Samples,
                            dropoutRate=self.dropoutRate, kernLength=self.kernLength,
                            F1=self.F1, D=self.D, F2=self.F2, **self.model_params)
-        
-        # Compile
+
+        # Calculate class weights for imbalanced data
+        class_counts = np.bincount(y_train_prep.astype(int))
+        total_samples = len(y_train_prep)
+        class_weight = {0: total_samples / (2 * class_counts[0]),
+                       1: total_samples / (2 * class_counts[1])}
+
+        # Compile with binary crossentropy and class weights
         self.model.compile(
-            loss='sparse_categorical_crossentropy',
+            loss='binary_crossentropy',
             optimizer=tf.keras.optimizers.Adam(learning_rate=lr),
             metrics=['accuracy']
         )
@@ -103,6 +109,7 @@ class EEGNetClassifier(BaseEEGClassifier):
             validation_data=(X_val_prep, y_val_prep),
             epochs=epochs,
             batch_size=batch_size,
+            class_weight=class_weight,
             callbacks=callbacks,
             verbose=1 if verbose else 0
         )
@@ -124,8 +131,8 @@ class EEGNetClassifier(BaseEEGClassifier):
         
         # Prepare data (just reshape, no subject normalization for prediction)
         X_prep = X.reshape(X.shape[0], X.shape[1], X.shape[2], 1)
-        probs = self.model.predict(X_prep, verbose=0)
-        return np.argmax(probs, axis=1)
+        probs = self.model.predict(X_prep, verbose=0).flatten()  # Single sigmoid output
+        return (probs > 0.5).astype(int)  # Binary threshold
     
     def predict_proba(self, X):
         """Get prediction probabilities"""
@@ -133,4 +140,6 @@ class EEGNetClassifier(BaseEEGClassifier):
             raise ValueError("Model must be trained first")
         
         X_prep = X.reshape(X.shape[0], X.shape[1], X.shape[2], 1)
-        return self.model.predict(X_prep, verbose=0)
+        probs = self.model.predict(X_prep, verbose=0).flatten()  # Single sigmoid output
+        # Return probabilities for both classes [p(class=0), p(class=1)]
+        return np.column_stack([1 - probs, probs])
