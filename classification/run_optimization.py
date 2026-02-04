@@ -1,5 +1,5 @@
 
-from classification.model_utils import optimize_single_model
+from classification.training_utils import optimize_single_model
 from data.data_configs import SUBJECTS
 
 PARAM_GRIDS = {
@@ -8,15 +8,14 @@ PARAM_GRIDS = {
         'F1': [8, 16],
         'F2': [16],
         'dropoutRate': [0.3],
-        'kernLength': [64],
-        'learning_rate': [0.001, 0.01],
-        'epochs': [75]
+        'learning_rate': [0.001, 0.0005],
     },
-    'cbramod': {
-        'dropout': [0.1, 0.2],
-        'hidden_dim': [256, 512],
-        'label_smoothing': [0.0],
-        'learning_rate': [0.001, 0.005],
+    'cbramod':{
+        'dropout': [0.1],
+        'hidden_dim': [200, 256, 512],
+        'weight_decay': [0.05],
+        'lr': [ 0.0001, 0.00005],
+        'label_smoothing': [0.0]
     },
     'csp': {
         'n_components': [2, 4, 6],
@@ -47,7 +46,6 @@ PARAM_GRIDS = {
     }
 }
 
-if __name__ == "__main__":
-    for model in PARAM_GRIDS.keys():
-        print(f"Optimizing {model}...")
-        optimize_single_model(model, SUBJECTS[:1], PARAM_GRIDS[model], max_trials=1)
+for model in PARAM_GRIDS.keys():
+    print(f"Optimizing {model}...")
+    optimize_single_model(model, SUBJECTS, PARAM_GRIDS[model], max_trials=30)

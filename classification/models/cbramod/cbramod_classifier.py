@@ -27,20 +27,33 @@ class LabelSmoothingBCELoss(nn.Module):
         return nn.functional.binary_cross_entropy_with_logits(inputs, smooth_targets)
 
 class CBraModWrapper(nn.Module):
-    """CBraMod with MLP head following paper recommendations"""
-    def __init__(self, backbone, input_dim, dropout=0.1, hidden_dim=512):
+    """CBraMod with MLP head following paper recommendations, with an extra hidden layer"""
+    def __init__(self, backbone, input_dim, dropout=0.1, hidden_dim=512, n_patches=1, n_channels=None, n_time=None):
         super().__init__()
         self.backbone = backbone
         self.backbone.proj_out = nn.Identity()  # Remove reconstruction head
-        
-        # MLP head as recommended in paper
+
+        # Resolve device for layer initialization to avoid dtype/device=None issues
+        try:
+            dev = next(self.backbone.parameters()).device
+        except StopIteration:
+            dev = torch.device('cpu')
+
+        # Determine dynamic intermediate dimensions based on patches/time when available
+        first_hidden = int(n_patches * n_time)  # e.g., 4*200 = 800 if using 4 patches of 1s
+
         self.classifier = nn.Sequential(
-            Rearrange('b c s p -> b (c s p)'),  # Flatten representations
-            nn.Linear(input_dim, hidden_dim),
-            nn.GELU(),  # Non-linear activation
+            Rearrange('b c s p -> b (c s p)'),
+            nn.Linear(int(input_dim), int(first_hidden)),
+            nn.ELU(),
             nn.Dropout(dropout),
-            nn.Linear(hidden_dim, 1)  # Binary classification output
+            nn.Linear(int(first_hidden), int(hidden_dim)),
+            nn.ELU(),
+            nn.Dropout(dropout),
+            nn.Linear(int(hidden_dim), 1)
         )
+        # Move classifier to the same device as backbone to avoid dtype/device init issues
+        self.classifier.to(dev)
         self._init_weights()
     
     def _init_weights(self):
@@ -58,7 +71,7 @@ class CBraModWrapper(nn.Module):
 class CBraModClassifier(BaseEEGClassifier):
     """CBraMod classifier following paper recommendations for binary classification"""
     
-    def __init__(self, lr=1e-4, epochs=75, batch_size=64, weight_decay=5e-2, dropout=0.1, hidden_dim=512, label_smoothing=0.0):
+    def __init__(self, lr=1e-4, epochs=50, batch_size=64, weight_decay=5e-2, dropout=0.1, hidden_dim=512, label_smoothing=0.0, freeze_backbone=False):
         super().__init__(name="CBraMod")
         self.lr = lr
         self.epochs = epochs
@@ -67,6 +80,7 @@ class CBraModClassifier(BaseEEGClassifier):
         self.dropout = dropout
         self.hidden_dim = hidden_dim
         self.label_smoothing = label_smoothing  # Paper uses 0.0 for binary tasks
+        self.freeze_backbone = freeze_backbone
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
     def prepare_data(self, X_train, y_train, X_eval, y_eval, 
@@ -169,23 +183,42 @@ class CBraModClassifier(BaseEEGClassifier):
         _, n_channels, n_patches, n_time = X_train_prep.shape
         input_dim = n_channels * n_patches * n_time
         
-        self.model = CBraModWrapper(backbone, input_dim, self.dropout, self.hidden_dim).to(self.device)
+        self.model = CBraModWrapper(
+            backbone,
+            input_dim,
+            self.dropout,
+            self.hidden_dim,
+            n_channels=n_channels,
+            n_patches=n_patches,
+            n_time=n_time
+        ).to(self.device)
+        
+        # Optionally freeze backbone
+        if self.freeze_backbone:
+            for p in self.model.backbone.parameters():
+                p.requires_grad = False
+        
+        # Debug: print trainable parameter counts
+        total_params = sum(p.numel() for p in self.model.parameters())
+        trainable_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
+        if verbose:
+            print(f"Trainable params: {trainable_params}/{total_params} ({trainable_params/total_params:.2%})")
         
         # Training setup following paper's binary classification approach
         optimizer = optim.AdamW(self.model.parameters(), lr=self.lr, weight_decay=self.weight_decay)
         
         # Calculate pos_weight for class imbalance (paper emphasizes balanced metrics)
         class_counts = np.bincount(y_train_prep.astype(int))
-        if len(class_counts) == 2 and class_counts[0] > 0:
-            pos_weight = torch.tensor(class_counts[0] / class_counts[1]).to(self.device)
+        if len(class_counts) == 2 and class_counts[0] > 0 and class_counts[1] > 0:
+            pos_weight = torch.tensor(class_counts[0] / class_counts[1], dtype=torch.float32, device=self.device)
         else:
-            pos_weight = torch.tensor(1.0).to(self.device)
+            pos_weight = torch.tensor(1.0, dtype=torch.float32, device=self.device)
         
         # Loss function: Standard BCE for binary (paper approach) or label smoothing if specified
         if self.label_smoothing > 0:
             criterion = LabelSmoothingBCELoss(smoothing=self.label_smoothing)
             if verbose:
-                print(f"Using label smoothing ({self.label_smoothing}) - not recommended by paper for binary tasks")
+                print(f"Using label smoothing ({self.label_smoothing})")
         else:
             criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)  # Weighted BCE for imbalance
             if verbose and pos_weight.item() != 1.0:
@@ -193,14 +226,14 @@ class CBraModClassifier(BaseEEGClassifier):
             
         scaler = torch.cuda.amp.GradScaler() if self.device.type == 'cuda' else None
         
-        # Cosine annealing scheduler as recommended
-        scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=self.epochs, eta_min=self.lr*0.01)
+        # Cosine annealing scheduler as recommended (min LR ~1e-6 for lr=1e-4)
+        scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=self.epochs, eta_min=max(self.lr*0.01, 1e-6))
         
         # Early stopping
         best_eval_acc = 0.0
         best_weights = None
         patience = 0
-        patience_limit = 20  # Increased for 50 epochs
+        patience_limit = 10  # Tighter early stopping to reduce overfitting
         
         # Training loop
         for epoch in range(self.epochs):
@@ -216,15 +249,19 @@ class CBraModClassifier(BaseEEGClassifier):
                 
                 if scaler is not None:
                     with torch.amp.autocast('cuda'):
-                        logits = self.model(X_batch).squeeze()
-                        loss = criterion(logits, y_batch)
+                        logits = self.model(X_batch).squeeze(-1)
+                        y_target = y_batch.view_as(logits)
+                        loss = criterion(logits, y_target)
                     scaler.scale(loss).backward()
                     scaler.step(optimizer)
                     scaler.update()
                 else:
-                    logits = self.model(X_batch).squeeze()
-                    loss = criterion(logits, y_batch)
+                    logits = self.model(X_batch).squeeze(-1)
+                    y_target = y_batch.view_as(logits)
+                    loss = criterion(logits, y_target)
                     loss.backward()
+                    # Gradient clipping to stabilize training
+                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
                     optimizer.step()
                 
                 train_loss += loss.item()
@@ -244,17 +281,18 @@ class CBraModClassifier(BaseEEGClassifier):
                     
                     if scaler is not None:
                         with torch.amp.autocast('cuda'):
-                            logits = self.model(X_batch).squeeze()
+                            logits = self.model(X_batch).squeeze(-1)
                     else:
-                        logits = self.model(X_batch).squeeze()
+                        logits = self.model(X_batch).squeeze(-1)
                     
                     probs = torch.sigmoid(logits)
                     eval_preds.extend((probs > 0.5).float().cpu().numpy())
                     eval_labels.extend(y_batch.numpy())
             
-            # Calculate accuracies
+            # Calculate accuracies and positive prediction rate
             train_acc = balanced_accuracy_score(train_labels, train_preds)
             eval_acc = balanced_accuracy_score(eval_labels, eval_preds)
+            eval_pos_rate = float(np.mean(eval_preds)) if len(eval_preds) > 0 else 0.0
             
             # Update learning rate scheduler
             scheduler.step()
@@ -262,7 +300,7 @@ class CBraModClassifier(BaseEEGClassifier):
             
             if verbose:
                 print(f"  Epoch {epoch+1:2d} | Loss: {train_loss/len(train_loader):.4f} | "
-                      f"Train: {train_acc:.4f} | Eval: {eval_acc:.4f} | LR: {current_lr:.2e}")
+                      f"Train: {train_acc:.4f} | Eval: {eval_acc:.4f} | PosRate: {eval_pos_rate:.2f} | LR: {current_lr:.2e}")
             
             # Early stopping
             if eval_acc > best_eval_acc:
@@ -298,13 +336,13 @@ class CBraModClassifier(BaseEEGClassifier):
         all_preds, all_probs = [], []
         
         # Create dataloader for batch processing
-        dataset = TensorDataset(torch.from_numpy(X).float(), torch.from_numpy(y))
+        dataset = TensorDataset(torch.from_numpy(X).float(), torch.from_numpy(y.astype(np.float32)))
         loader = DataLoader(dataset, batch_size=32, shuffle=False)
         
         with torch.no_grad():
             for X_batch, y_batch in loader:
                 X_batch = X_batch.to(self.device)
-                logits = self.model(X_batch).squeeze()
+                logits = self.model(X_batch).squeeze(-1)
                 probs = torch.sigmoid(logits)
                 preds = (probs > 0.5).float()
                 

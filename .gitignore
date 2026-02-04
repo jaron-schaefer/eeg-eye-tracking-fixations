@@ -12,6 +12,7 @@ __pycache__/
 
 # Data directories
 data/data
+results
 
 
 # OS files

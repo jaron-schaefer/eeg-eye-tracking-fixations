@@ -92,7 +92,7 @@ class DataLoader:
         y_blocks = []
         subject_ids = []
         feature_names = None
-        stimulus_summary = None
+        stim_list = []
         
         for subj in subj_list:
             # Use relative path from data_path
@@ -124,10 +124,9 @@ class DataLoader:
                 df = df[selected_cols]
                 print(f"Filtered to {len(selected_cols)-1} features for channels {channels} (subject {subj})")
             
-            # Handle stimulus summary
+            # Handle stimulus summary: collect per subject for later concatenation
             if 'stimulus_summary' in df.columns:
-                if stimulus_summary is None:
-                    stimulus_summary = df['stimulus_summary']
+                stim_list.append(df['stimulus_summary'])
                 df = df.drop(columns=['stimulus_summary'])
             
             # Extract features and labels
@@ -155,6 +154,7 @@ class DataLoader:
             
         X_out = np.vstack(X_blocks)
         y_out = np.concatenate(y_blocks) if y_blocks else None
+        stimulus_summary = (pd.concat(stim_list, ignore_index=True) if len(stim_list) > 0 else None)
         return X_out, y_out, feature_names, subject_ids, stimulus_summary
     
     
@@ -169,7 +169,7 @@ class DataLoader:
         y_blocks = []
         subject_ids = []
         feature_names = None
-        stimulus_summary = None
+        stimulus_summary_list = []
         for subj in subj_list:
             # Use relative path from data_path
             feat_path = cls._get_data_path("features", "et_features", f"{subj}_features.csv")
@@ -180,8 +180,7 @@ class DataLoader:
             # Define columns to exclude from features (metadata and label)
             exclude_cols = ['subject', 'stimulus', 'fixation_on_airplane', 'stimulus_summary']
             if 'stimulus_summary' in df.columns:
-                if stimulus_summary is None:
-                    stimulus_summary = df['stimulus_summary']
+                stimulus_summary_list.append(df['stimulus_summary'])
             if 'fixation_on_airplane' in df.columns:
                 y = df['fixation_on_airplane'].values
             else:
@@ -201,6 +200,7 @@ class DataLoader:
             raise ValueError(f"No features loaded for subjects: {subj_list}")
         X_out = np.vstack(X_blocks)
         y_out = np.concatenate(y_blocks)
+        stimulus_summary = (pd.concat(stimulus_summary_list, ignore_index=True) if len(stimulus_summary_list) > 0 else None)
         return X_out, y_out, feature_names, subject_ids, stimulus_summary
     
 
