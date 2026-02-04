@@ -27,19 +27,15 @@ class BaseEEGClassifier(abc.ABC):
     
     @abc.abstractmethod
     def prepare_data(self, X_train: np.ndarray, y_train: np.ndarray, 
-                    X_val: np.ndarray, y_val: np.ndarray,
-                    X_test: Optional[np.ndarray] = None, 
-                    y_test: Optional[np.ndarray] = None) -> Tuple[Any, ...]:
+                    X_eval: np.ndarray, y_eval: np.ndarray) -> Tuple[Any, ...]:
         """Preprocess data for model-specific format"""
         pass
     
     @abc.abstractmethod
     def train(self, X_train: np.ndarray, y_train: np.ndarray,
-             X_val: np.ndarray, y_val: np.ndarray, 
-             X_test: Optional[np.ndarray] = None,
-             y_test: Optional[np.ndarray] = None,
+             X_eval: np.ndarray, y_eval: np.ndarray, 
              **kwargs) -> Dict[str, Any]:
-        """Train the model with validation monitoring"""
+        """Train the model with evaluation data (validation during optimization, test during final evaluation)"""
         pass
     
     @abc.abstractmethod
@@ -106,11 +102,3 @@ class BaseEEGClassifier(abc.ABC):
         
         return results
     
-    def get_info(self) -> Dict[str, Any]:
-        """Get classifier information and state"""
-        return {
-            'name': self.name,
-            'is_trained': self.is_trained,
-            'model_type': type(self.model).__name__ if self.model else None,
-            'training_history': self.training_history
-        }

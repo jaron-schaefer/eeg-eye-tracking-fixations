@@ -18,7 +18,7 @@ class CSPClassifier(BaseEEGClassifier):
         self.clf_type = clf_type
         self.csp_params = csp_params
         
-    def prepare_data(self, X_train, y_train, X_val, y_val, X_test=None, y_test=None):
+    def prepare_data(self, X_train, y_train, X_eval, y_eval):
         """Bandpass filter EEG data for CSP"""
         def filter_data(X, y):
             if len(X) == 0:
@@ -36,23 +36,18 @@ class CSPClassifier(BaseEEGClassifier):
             return X_clean, np.array(y)
         
         X_train_clean, y_train_clean = filter_data(X_train, y_train)
-        X_val_clean, y_val_clean = filter_data(X_val, y_val)
-        
-        if X_test is not None:
-            X_test_clean, y_test_clean = filter_data(X_test, y_test)
-        else:
-            X_test_clean, y_test_clean = None, None
+        X_eval_clean, y_eval_clean = filter_data(X_eval, y_eval)
             
-        return X_train_clean, y_train_clean, X_val_clean, y_val_clean, X_test_clean, y_test_clean
+        return X_train_clean, y_train_clean, X_eval_clean, y_eval_clean
     
-    def train(self, X_train, y_train, X_val, y_val, X_test=None, y_test=None, verbose=True):
+    def train(self, X_train, y_train, X_eval, y_eval, verbose=True):
         """Train CSP classifier"""
         if verbose:
             print(f"\\n[CSP Training] Components: {self.n_components}, Classifier: {self.clf_type.upper()}")
         
         # Prepare data
-        X_train_prep, y_train_prep, X_val_prep, y_val_prep, X_test_prep, y_test_prep = self.prepare_data(
-            X_train, y_train, X_val, y_val, X_test, y_test
+        X_train_prep, y_train_prep, X_eval_prep, y_eval_prep = self.prepare_data(
+            X_train, y_train, X_eval, y_eval
         )
         
         # Build and train model
@@ -60,11 +55,8 @@ class CSPClassifier(BaseEEGClassifier):
         self.model.fit(X_train_prep, y_train_prep)
         self.is_trained = True
         
-        # Evaluate
-        if X_test_prep is not None:
-            results = self.evaluate(X_test_prep, y_test_prep, "Test")
-        else:
-            results = self.evaluate(X_val_prep, y_val_prep, "Validation")
+        # Evaluate on evaluation data
+        results = self.evaluate(X_eval_prep, y_eval_prep, "Evaluation")
         
         return results
     

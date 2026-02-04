@@ -11,7 +11,7 @@ from data.data_configs import (
     IMAGE_DIR,
     ET_DIR,
     LABELED_ET_ALL_DATA_DIR,
-    COLUMN_NAMES,
+    ET_COLUMN_NAMES,
     FIXATION_RADIUS,
     SELECTED_ET_DATA_DIR,
     SELECTED_ET_DATA_DIR,
@@ -81,7 +81,7 @@ def load_raw_et_df(subject: str, stimulus: str) -> pd.DataFrame:
         raise FileNotFoundError(f"ET data not found: {et_path}")
 
     # Load raw ET data
-    raw_df = pd.read_csv(et_path, comment='#', names=COLUMN_NAMES, low_memory=False)
+    raw_df = pd.read_csv(et_path, comment='#', names=ET_COLUMN_NAMES, low_memory=False)
 
     # Add coordinates relative to stimulus center
     raw_df = add_stimulus_coords(raw_df.copy())

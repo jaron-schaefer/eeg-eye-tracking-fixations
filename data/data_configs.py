@@ -84,6 +84,11 @@ EEG_CHANNEL_NAMES = [
     'AF3', 'PO3'  # Note: 'Status' channel is excluded (not EEG data)
 ]
 
+ARTIFACT_CHANNELS = [
+    'Fp1', 'Fp2', 'F7', 'F8',
+    'AF3', 'AF4', 'T7', 'T8'
+]
+
 # Standard 10-20 system channel set
 # ORIGINAL_CBRAMOD_CHANNELS = [
 #     'Fp1', 'Fp2', 'F7', 'F3', 'Fz', 'F4', 'F8',

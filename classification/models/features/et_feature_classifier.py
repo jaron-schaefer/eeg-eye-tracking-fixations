@@ -33,20 +33,12 @@ class ETFeatureClassifier(BaseEEGClassifier):
     
     AVAILABLE_MODELS = {
         'rf': RandomForestClassifier,
-        'svm': SVC,
-        'lr': LogisticRegression,
-        'knn': KNeighborsClassifier,
-        'nb': GaussianNB,
-        'dt': DecisionTreeClassifier
+        'svm': SVC
     }
     
     DEFAULT_PARAMS = {
         'rf': {'n_estimators': 100, 'random_state': 42, 'class_weight': 'balanced'},
-        'svm': {'kernel': 'rbf', 'random_state': 42, 'class_weight': 'balanced', 'probability': True},
-        'lr': {'random_state': 42, 'class_weight': 'balanced', 'max_iter': 1000},
-        'knn': {'n_neighbors': 5},
-        'nb': {},
-        'dt': {'random_state': 42, 'class_weight': 'balanced'}
+        'svm': {'kernel': 'rbf', 'random_state': 42, 'class_weight': 'balanced', 'probability': True}
     }
     
     def __init__(self, model_type: str = 'rf', subjects: List[str] = None, **model_params):
@@ -75,38 +67,25 @@ class ETFeatureClassifier(BaseEEGClassifier):
         return DataLoader.load_et_features(self.subjects)
     
     def prepare_data(self, X_train: np.ndarray, y_train: np.ndarray, 
-                    X_val: np.ndarray, y_val: np.ndarray,
-                    X_test: Optional[np.ndarray] = None, 
-                    y_test: Optional[np.ndarray] = None) -> Tuple[Any, ...]:
+                    X_eval: np.ndarray, y_eval: np.ndarray) -> Tuple[Any, ...]:
         """Prepare ET features data with cleaning, imputation, and scaling"""
         
-        # For features, we don't have separate train/val splits initially
+        # For features, we don't have separate train/eval splits initially
         # Combine all data for preprocessing
-        X_all = np.vstack([X_train, X_val] + ([X_test] if X_test is not None else []))
-        y_all = np.hstack([y_train, y_val] + ([y_test] if y_test is not None else []))
-        
-        # Get feature names if available
-        if self.feature_names is None:
-            # Try to get feature names from data loader
-            try:
-                _, _, self.feature_names, _ = self.load_data()
-            except:
-                self.feature_names = [f'et_feature_{i}' for i in range(X_all.shape[1])]
+        X_all = np.vstack([X_train, X_eval])
+        y_all = np.hstack([y_train, y_eval])
         
         # Clean data - handle NaNs
-        df = pd.DataFrame(X_all, columns=self.feature_names)
-        nan_counts = df.isna().sum()
+        nan_counts = np.isnan(X_all).sum(axis=0)
+        total_samples = X_all.shape[0]
         
-        print(f"Features with NaNs: {(nan_counts > 0).sum()}/{len(self.feature_names)}")
+        print(f"Features with NaNs: {(nan_counts > 0).sum()}/{X_all.shape[1]}")
         
         # Remove features with >50% NaN
-        high_nan = nan_counts[nan_counts > len(df) * 0.5].index.tolist()
-        self.feature_names_clean = [f for f in self.feature_names if f not in high_nan]
+        keep_features = nan_counts <= (total_samples * 0.5)
+        X_clean = X_all[:, keep_features]
         
-        print(f"Features after cleaning: {len(self.feature_names_clean)}/{len(self.feature_names)}")
-        
-        # Get clean features
-        X_clean = df[self.feature_names_clean].values
+        print(f"Features after cleaning: {X_clean.shape[1]}/{X_all.shape[1]}")
         
         # Impute remaining NaNs
         if not hasattr(self.imputer, 'statistics_'):
@@ -116,17 +95,12 @@ class ETFeatureClassifier(BaseEEGClassifier):
         
         # Split back into original sets
         train_size = len(X_train)
-        val_size = len(X_val)
+        eval_size = len(X_eval)
         
         X_train_clean = X_imputed[:train_size]
-        X_val_clean = X_imputed[train_size:train_size+val_size]
+        X_eval_clean = X_imputed[train_size:train_size+eval_size]
         
-        if X_test is not None:
-            X_test_clean = X_imputed[train_size+val_size:]
-        else:
-            X_test_clean = None
-        
-        return X_train_clean, y_train, X_val_clean, y_val, X_test_clean, y_test
+        return X_train_clean, y_train, X_eval_clean, y_eval
     
     def build_model(self, input_shape: Tuple, **kwargs) -> Any:
         """Build the specified model"""
@@ -134,190 +108,34 @@ class ETFeatureClassifier(BaseEEGClassifier):
         return model_class(**self.model_params)
     
     def train(self, X_train: np.ndarray, y_train: np.ndarray,
-             X_val: np.ndarray, y_val: np.ndarray, 
-             X_test: Optional[np.ndarray] = None,
-             y_test: Optional[np.ndarray] = None,
+             X_eval: np.ndarray, y_eval: np.ndarray, 
              **kwargs) -> Dict[str, Any]:
         """Train the ET feature classifier"""
         
-        print(f"\\n[{self.name} Training] Model: {self.model_type.upper()}")
-        print(f"Training samples: {len(X_train)}, Validation samples: {len(X_val)}")
+        print(f"\n[{self.name} Training] Model: {self.model_type.upper()}")
+        print(f"Training samples: {len(X_train)}, Evaluation samples: {len(X_eval)}")
         
         # Prepare data
-        X_train_prep, y_train_prep, X_val_prep, y_val_prep, X_test_prep, y_test_prep = self.prepare_data(
-            X_train, y_train, X_val, y_val, X_test, y_test
+        X_train_prep, y_train_prep, X_eval_prep, y_eval_prep = self.prepare_data(
+            X_train, y_train, X_eval, y_eval
         )
         
-        # Scale features
-        if not hasattr(self.scaler, 'mean_'):
-            X_train_prep = self.scaler.fit_transform(X_train_prep)
-        else:
-            X_train_prep = self.scaler.transform(X_train_prep)
+        X_train_prep = self.scaler.fit_transform(X_train_prep)
             
-        X_val_prep = self.scaler.transform(X_val_prep)
-        if X_test_prep is not None:
-            X_test_prep = self.scaler.transform(X_test_prep)
+        X_eval_prep = self.scaler.transform(X_eval_prep)
         
         # Build and train model
         self.model = self.build_model(input_shape=X_train_prep.shape)
         self.model.fit(X_train_prep, y_train_prep)
         self.is_trained = True
         
-        # Evaluate
-        results = {}
-        results['train'] = self._evaluate_set(X_train_prep, y_train_prep, "Train")
-        results['validation'] = self._evaluate_set(X_val_prep, y_val_prep, "Validation")
-        
-        if X_test_prep is not None:
-            results['test'] = self._evaluate_set(X_test_prep, y_test_prep, "Test")
+        # Evaluate using base class method (it calls predict internally)
+        results = self.evaluate(X_eval_prep, y_eval_prep)
         
         return results
-    
-    def _evaluate_set(self, X, y, set_name: str) -> Dict[str, float]:
-        """Evaluate model on a dataset"""
-        y_pred = self.model.predict(X)
-        
-        acc = accuracy_score(y, y_pred)
-        f1_macro = f1_score(y, y_pred, average='macro')
-        bal_acc = balanced_accuracy_score(y, y_pred)
-        
-        print(f"{set_name}: Accuracy={acc:.4f}, Macro-F1={f1_macro:.4f}, Balanced Acc={bal_acc:.4f}")
-        
-        return {
-            'accuracy': acc,
-            'f1_macro': f1_macro,
-            'balanced_accuracy': bal_acc,
-            'predictions': y_pred
-        }
-    
+
     def predict(self, X: np.ndarray) -> np.ndarray:
-        """Make predictions"""
         if not self.is_trained:
             raise ValueError("Model must be trained first")
-        
-        # Apply same preprocessing as training
-        if hasattr(self.imputer, 'statistics_'):
-            df = pd.DataFrame(X, columns=self.feature_names)
-            X_clean = df[self.feature_names_clean].values
-            X_imputed = self.imputer.transform(X_clean)
-            X_scaled = self.scaler.transform(X_imputed)
-            return self.model.predict(X_scaled)
-        else:
-            return self.model.predict(X)
+        return self.model.predict(X)
     
-    def predict_proba(self, X: np.ndarray) -> np.ndarray:
-        """Get prediction probabilities"""
-        if not self.is_trained:
-            raise ValueError("Model must be trained first")
-        
-        if hasattr(self.model, 'predict_proba'):
-            if hasattr(self.imputer, 'statistics_'):
-                df = pd.DataFrame(X, columns=self.feature_names)
-                X_clean = df[self.feature_names_clean].values
-                X_imputed = self.imputer.transform(X_clean)
-                X_scaled = self.scaler.transform(X_imputed)
-                return self.model.predict_proba(X_scaled)
-            else:
-                return self.model.predict_proba(X)
-        else:
-            raise ValueError(f"Model {self.model_type} does not support probability prediction")
-    
-    def cross_validate(self, cv_type: str = 'stratified', n_splits: int = 5, 
-                      subjects: List[str] = None, 
-                      subject_ids: Optional[List[str]] = None) -> Dict[str, Any]:
-        """Perform cross-validation on ET features"""
-        if subjects is None:
-            subjects = self.subjects
-        
-        # Load data
-        X, y, feature_names, subject_ids_loaded = DataLoader.load_et_features(subjects)
-        self.feature_names = feature_names
-        
-        if subject_ids is None:
-            subject_ids = subject_ids_loaded
-        
-        print(f"Loaded {X.shape[0]} samples with {X.shape[1]} ET features")
-        print(f"Class distribution: {np.bincount(y.astype(int))}")
-        
-        # Prepare data (preprocessing)
-        X_prep, _, _, _, _, _ = self.prepare_data(X, y, np.array([]), np.array([]))
-        
-        # Scale features
-        scaler = StandardScaler()
-        X_prep = scaler.fit_transform(X_prep)
-        
-        # Set up cross-validation
-        if cv_type == 'stratified':
-            cv = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
-            cv_splits = cv.split(X_prep, y)
-        elif cv_type == 'grouped':
-            if subject_ids is None:
-                raise ValueError("subject_ids required for grouped CV")
-            cv = GroupKFold(n_splits=n_splits)
-            cv_splits = cv.split(X_prep, y, groups=subject_ids)
-        else:
-            raise ValueError(f"Unknown cv_type: {cv_type}")
-        
-        # Perform CV
-        print(f"\\n=== {cv_type.title()} K-Fold CV ({n_splits} splits) ===")
-        print(f"Model: {self.model_type.upper()}")
-        
-        y_true_all, y_pred_all = [], []
-        fold_results = []
-        
-        for fold, (train_idx, test_idx) in enumerate(cv_splits, 1):
-            # Build and train model
-            model = self.build_model(input_shape=X_prep.shape)
-            model.fit(X_prep[train_idx], y[train_idx])
-            
-            # Predict
-            y_pred = model.predict(X_prep[test_idx])
-            
-            # Store for overall metrics
-            y_true_all.append(y[test_idx])
-            y_pred_all.append(y_pred)
-            
-            # Compute fold metrics
-            acc = accuracy_score(y[test_idx], y_pred)
-            f1 = f1_score(y[test_idx], y_pred, average='macro')
-            bal_acc = balanced_accuracy_score(y[test_idx], y_pred)
-            
-            fold_result = {
-                'fold': fold,
-                'accuracy': acc,
-                'f1_macro': f1,
-                'balanced_accuracy': bal_acc
-            }
-            fold_results.append(fold_result)
-            
-            if cv_type == 'grouped' and subject_ids is not None:
-                subjects_in_fold = np.unique(subject_ids[test_idx])
-                print(f"Fold {fold} | Subjects: {subjects_in_fold} | Accuracy={acc:.4f}, Macro-F1={f1:.4f}, Balanced Acc={bal_acc:.4f}")
-            else:
-                print(f"Fold {fold}: Accuracy={acc:.4f}, Macro-F1={f1:.4f}, Balanced Acc={bal_acc:.4f}")
-        
-        # Aggregate results
-        y_true_all = np.concatenate(y_true_all)
-        y_pred_all = np.concatenate(y_pred_all)
-        
-        overall_f1 = f1_score(y_true_all, y_pred_all, average='macro')
-        overall_bal_acc = balanced_accuracy_score(y_true_all, y_pred_all)
-        overall_acc = accuracy_score(y_true_all, y_pred_all)
-        
-        print(f"\\nOverall Results:")
-        print(f"Accuracy: {overall_acc:.4f}")
-        print(f"Macro-F1: {overall_f1:.4f}")
-        print(f"Balanced Accuracy: {overall_bal_acc:.4f}")
-        
-        return {
-            'cv_type': cv_type,
-            'n_splits': n_splits,
-            'model_type': self.model_type,
-            'fold_results': fold_results,
-            'overall_accuracy': overall_acc,
-            'overall_f1_macro': overall_f1,
-            'overall_balanced_accuracy': overall_bal_acc,
-            'y_true': y_true_all,
-            'y_pred': y_pred_all,
-            'confusion_matrix': confusion_matrix(y_true_all, y_pred_all)
-        }

@@ -1,21 +1,31 @@
 {
-  "eegnet": {
-    "params": {
-      "D": 2,
-      "F1": 8,
-      "F2": 16,
-      "dropoutRate": 0.2,
-      "kernLength": 64
-    },
-    "score": 0.5
-  },
   "features_rf": {
+    "params": {
+      "max_depth": 30,
+      "min_samples_leaf": 1,
+      "min_samples_split": 2,
+      "n_estimators": 200
+    },
+    "score": 0.7098359566978814,
+    "balanced_accuracy": 0.7098359566978814
+  },
+  "csp": {
+    "params": {
+      "clf_type": "lda",
+      "n_components": 2,
+      "reg": 0.01
+    },
+    "score": 0.4974845586770273,
+    "balanced_accuracy": 0.4974845586770273
+  },
+  "et_rf": {
     "params": {
       "max_depth": 20,
       "min_samples_leaf": 1,
       "min_samples_split": 2,
       "n_estimators": 100
     },
-    "score": 0.5
+    "score": 0.6970730408422432,
+    "balanced_accuracy": 0.6970730408422432
   }
 }
