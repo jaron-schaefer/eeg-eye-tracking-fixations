@@ -108,7 +108,7 @@ class CBraModClassifier(BaseEEGClassifier):
             if len(X_filtered) == 0:
                 raise ValueError("All data filtered out! Check signal units (should be µV)")
             
-            # Scale by 100µV (CRITICAL: Paper requires this exact scaling)
+            # Scale by 100µV
             X_scaled = X_filtered / 100.0
             
             # Validate scaling (should be roughly in [-1, 1] range after scaling)
@@ -143,7 +143,6 @@ class CBraModClassifier(BaseEEGClassifier):
         if verbose:
             gpu_info = f"GPU: {torch.cuda.get_device_name(0)}" if torch.cuda.is_available() else "CPU"
             print(f"\n[CBraMod Training] Device: {gpu_info}, LR: {self.lr}, Epochs: {self.epochs}, Batch: {self.batch_size}")
-            print(f"Following paper: Binary BCE loss, full fine-tuning, cosine annealing")
         
         # Prepare data
         X_train_prep, y_train_prep, X_eval_prep, y_eval_prep = self.prepare_data(
@@ -153,10 +152,6 @@ class CBraModClassifier(BaseEEGClassifier):
         class_counts = np.bincount(y_train_prep.astype(int))
         if len(class_counts) == 2:
             pos_ratio = class_counts[1] / class_counts[0] if class_counts[0] > 0 else 1.0
-            if verbose:
-                print(f"Class distribution: {class_counts[0]} non-targets, {class_counts[1]} targets")
-                if pos_ratio < 0.2 or pos_ratio > 5.0:
-                    print(f"⚠️  Class imbalance detected (ratio: {pos_ratio:.2f}). Using weighted loss.")
         
         # Create data loaders
         train_ds = TensorDataset(torch.from_numpy(X_train_prep).float(), 
@@ -174,8 +169,6 @@ class CBraModClassifier(BaseEEGClassifier):
         backbone = CBraMod().to(self.device)
         try:
             backbone.load_state_dict(torch.load(weights_path, map_location=self.device))
-            if verbose:
-                print("✅ Loaded pretrained weights")
         except FileNotFoundError:
             raise FileNotFoundError(f"Pretrained weights not found at {weights_path}")
         
@@ -198,12 +191,6 @@ class CBraModClassifier(BaseEEGClassifier):
             for p in self.model.backbone.parameters():
                 p.requires_grad = False
         
-        # Debug: print trainable parameter counts
-        total_params = sum(p.numel() for p in self.model.parameters())
-        trainable_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
-        if verbose:
-            print(f"Trainable params: {trainable_params}/{total_params} ({trainable_params/total_params:.2%})")
-        
         # Training setup following paper's binary classification approach
         optimizer = optim.AdamW(self.model.parameters(), lr=self.lr, weight_decay=self.weight_decay)
         
@@ -217,12 +204,8 @@ class CBraModClassifier(BaseEEGClassifier):
         # Loss function: Standard BCE for binary (paper approach) or label smoothing if specified
         if self.label_smoothing > 0:
             criterion = LabelSmoothingBCELoss(smoothing=self.label_smoothing)
-            if verbose:
-                print(f"Using label smoothing ({self.label_smoothing})")
         else:
             criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)  # Weighted BCE for imbalance
-            if verbose and pos_weight.item() != 1.0:
-                print(f"Using weighted BCE loss (pos_weight: {pos_weight.item():.2f}) for class imbalance")
             
         scaler = torch.cuda.amp.GradScaler() if self.device.type == 'cuda' else None
         

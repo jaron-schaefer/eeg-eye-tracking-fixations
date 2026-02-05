@@ -84,7 +84,7 @@ class DataLoader:
         mode: str = "advanced", 
         channels: Optional[List[str]] = None
     ) -> Tuple[np.ndarray, np.ndarray, List[str], List[str], Optional[pd.Series]]:
-        """Load EEG features with optional channel filtering.
+        """Load EEG features with optional channel filtering and per-subject scaling.
         """
 
         subj_list = [subjects] if isinstance(subjects, str) else list(subjects)
@@ -98,7 +98,6 @@ class DataLoader:
             # Use relative path from data_path
             feat_path = cls._get_data_path("features", mode, subj, "features.csv")
             if not feat_path.exists():
-                print(f"Warning: Feature file not found for {subj}: {feat_path}")
                 continue
             df = pd.read_csv(feat_path)
             
@@ -122,7 +121,6 @@ class DataLoader:
                         selected_cols.append(meta_col)
                         
                 df = df[selected_cols]
-                print(f"Filtered to {len(selected_cols)-1} features for channels {channels} (subject {subj})")
             
             # Handle stimulus summary: collect per subject for later concatenation
             if 'stimulus_summary' in df.columns:
@@ -141,10 +139,13 @@ class DataLoader:
 
             if feature_names is None:
                 feature_names = current_feature_names
-            elif feature_names != current_feature_names:
-                print(f"Warning: Feature names mismatch for subject {subj}")
-                
-            X_blocks.append(X)
+            
+            # Per-subject z-score normalization
+            from sklearn.preprocessing import StandardScaler
+            scaler = StandardScaler()
+            X_scaled = scaler.fit_transform(X)
+            
+            X_blocks.append(X_scaled)
             if y is not None:
                 y_blocks.append(y)
             subject_ids.extend([subj] * len(X))
@@ -155,6 +156,11 @@ class DataLoader:
         X_out = np.vstack(X_blocks)
         y_out = np.concatenate(y_blocks) if y_blocks else None
         stimulus_summary = (pd.concat(stim_list, ignore_index=True) if len(stim_list) > 0 else None)
+        
+        # Summary
+        channel_info = f" ({len(channels)} channels)" if channels else ""
+        print(f"✓ Loaded {X_out.shape[0]} feature samples from {len(subj_list)} subjects{channel_info}")
+        
         return X_out, y_out, feature_names, subject_ids, stimulus_summary
     
     
@@ -163,7 +169,7 @@ class DataLoader:
         cls,
         subjects: Union[str, Sequence[str]],
     ) -> Tuple[np.ndarray, np.ndarray, List[str], List[str], Optional[pd.Series]]:
-        """Load eye tracking features."""
+        """Load eye tracking features with per-subject scaling."""
         subj_list = [subjects] if isinstance(subjects, str) else list(subjects)
         X_blocks = []
         y_blocks = []
@@ -174,7 +180,6 @@ class DataLoader:
             # Use relative path from data_path
             feat_path = cls._get_data_path("features", "et_features", f"{subj}_features.csv")
             if not feat_path.exists():
-                print(f"Warning: Feature file not found for {subj}: {feat_path}")
                 continue
             df = pd.read_csv(feat_path)
             # Define columns to exclude from features (metadata and label)
@@ -191,9 +196,13 @@ class DataLoader:
             # Store feature names from first subject
             if feature_names is None:
                 feature_names = feature_cols
-            elif feature_cols != feature_names:
-                print(f"Warning: Feature mismatch for {subj}. Expected {len(feature_names)}, got {len(feature_cols)}")
-            X_blocks.append(X)
+            
+            # Per-subject z-score normalization
+            from sklearn.preprocessing import StandardScaler
+            scaler = StandardScaler()
+            X_scaled = scaler.fit_transform(X)
+            
+            X_blocks.append(X_scaled)
             y_blocks.append(y)
             subject_ids.extend([subj] * len(X))
         if not X_blocks:
@@ -201,6 +210,10 @@ class DataLoader:
         X_out = np.vstack(X_blocks)
         y_out = np.concatenate(y_blocks)
         stimulus_summary = (pd.concat(stimulus_summary_list, ignore_index=True) if len(stimulus_summary_list) > 0 else None)
+        
+        # Summary
+        print(f"✓ Loaded {X_out.shape[0]} ET feature samples from {len(subj_list)} subjects")
+        
         return X_out, y_out, feature_names, subject_ids, stimulus_summary
     
 
@@ -256,9 +269,6 @@ class DataLoader:
         """
         Load EEG data AND stimulus summary together.
         """
-        print("\n" + "="*70)
-        print("LOADING EEG DATA WITH STIMULUS SUMMARY")
-        print("="*70)
         
         all_X, all_y, all_subjects, all_stim = [], [], [], []
         
@@ -268,18 +278,12 @@ class DataLoader:
         epoch_start_idx = fixation_idx + int(epoch_start_ms / 1000 * fs)
         epoch_end_idx = fixation_idx + int(epoch_end_ms / 1000 * fs)
         
-        print(f"\nEpoch settings:")
-        print(f"  Window: [-{pre_ms}, {post_ms}] ms")
-        print(f"  Epoch: [{epoch_start_ms}, {epoch_end_ms}] ms")
-        print(f"  Sampling rate: {fs} Hz")
         
         # Load data from each subject
-        print(f"\nLoading from {len(subjects)} subjects...")
         for subject in subjects:
             file_path = cls._get_data_path("labeled_eeg_data", subject, f"{pre_ms}_{post_ms}_training_data.npz")
             
             if not file_path.exists():
-                print(f" {subject}: File not found")
                 continue
             
             # Load all data
@@ -290,7 +294,6 @@ class DataLoader:
                 ch_indices = [list(ch_names).index(ch) for ch in channels if ch in ch_names]
                 
                 if len(ch_indices) == 0:
-                    print(f"  ⚠ {subject}: No matching channels")
                     continue
                 
                 # Load EEG
@@ -303,7 +306,6 @@ class DataLoader:
                 elif 'stimulus' in data:
                     stim = data['stimulus'][:].copy()
                 else:
-                    print(f"  ⚠ {subject}: No stimulus data, using zeros")
                     stim = np.zeros(len(y))
             
             all_X.append(X_selected)
@@ -321,19 +323,85 @@ class DataLoader:
         del all_X, all_y, all_stim
         gc.collect()
         
-        # Print summary
-        print(f"\n✓ Data loaded:")
-        print(f"  EEG: {X_combined.shape}")
-        print(f"  Labels: {y_combined.shape}")
-        print(f"  Stimulus: {stimulus_combined.shape}")
-        print(f"  Subjects: {len(set(all_subjects))}")
-        
-        # Print label distribution
+        # Summary
         label_counts = Counter(y_combined)
-        total_samples = len(y_combined)
-        print(f"\nLabel distribution:")
-        for label, count in sorted(label_counts.items()):
-            proportion = count / total_samples
-            print(f"  Label {label}: {count} samples ({proportion:.2%})")
+        print(f"✓ Loaded {X_combined.shape[0]} EEG samples from {len(set(all_subjects))} subjects")
+        
+        return X_combined, y_combined, np.array(all_subjects), stimulus_combined
+
+    @classmethod
+    def load_labeled_eeg_data_scaled(cls, subjects, channels,
+                                epoch_start_ms=EPOCH_START_MS,
+                                epoch_end_ms=EPOCH_END_MS,
+                                pre_ms=PRE_WINDOW_MS,
+                                post_ms=POST_WINDOW_MS,
+                                fs=EEG_SAMPLE_FREQUENCY):
+        """
+        Load EEG data with per-subject z-score normalization for CSP and EEGNet.
+        This version applies z-score normalization per subject across trials and time.
+        """
+        all_X, all_y, all_subjects, all_stim = [], [], [], []
+        
+        # Calculate epoch indices
+        total_time_points = int((pre_ms + post_ms) / 1000 * fs)
+        fixation_idx = int(pre_ms / 1000 * fs)
+        epoch_start_idx = fixation_idx + int(epoch_start_ms / 1000 * fs)
+        epoch_end_idx = fixation_idx + int(epoch_end_ms / 1000 * fs)
+        
+        # Load data from each subject
+        for subject in subjects:
+            file_path = cls._get_data_path("labeled_eeg_data", subject, f"{pre_ms}_{post_ms}_training_data.npz")
+            
+            if not file_path.exists():
+                continue
+            
+            # Load all data
+            with np.load(file_path, mmap_mode='r') as data:
+                ch_names = data['channel_names']
+                
+                # Find channel indices
+                ch_indices = [list(ch_names).index(ch) for ch in channels if ch in ch_names]
+                
+                if len(ch_indices) == 0:
+                    continue
+                
+                # Load EEG
+                X_selected = data['X'][:, ch_indices, epoch_start_idx:epoch_end_idx].copy().astype(np.float32)
+                y = data['y'][:]
+                
+                # Per-subject z-score normalization across trials and time
+                # Calculate mean and std across trials (axis=0) and time (axis=2)
+                subject_mean = np.mean(X_selected, axis=(0, 2), keepdims=True)
+                subject_std = np.std(X_selected, axis=(0, 2), keepdims=True)
+                # Avoid division by zero
+                subject_std[subject_std == 0] = 1.0
+                X_normalized = (X_selected - subject_mean) / subject_std
+                
+                # Load stimulus
+                if 'stimulus_summary' in data:
+                    stim = data['stimulus_summary'][:].copy()
+                elif 'stimulus' in data:
+                    stim = data['stimulus'][:].copy()
+                else:
+                    stim = np.zeros(len(y))
+            
+            all_X.append(X_normalized)
+            all_y.append(y)
+            all_stim.append(stim)
+            all_subjects.extend([subject] * len(y))
+            
+            del X_selected, X_normalized, stim
+            gc.collect()
+        
+        # Combine all subjects
+        X_combined = np.concatenate(all_X, axis=0).astype(np.float32)
+        y_combined = np.concatenate(all_y, axis=0)
+        stimulus_combined = np.concatenate(all_stim, axis=0)
+        del all_X, all_y, all_stim
+        gc.collect()
+        
+        # Summary
+        label_counts = Counter(y_combined)
+        print(f"✓ Loaded {X_combined.shape[0]} EEG samples from {len(set(all_subjects))} subjects (per-subject scaled)")
         
         return X_combined, y_combined, np.array(all_subjects), stimulus_combined

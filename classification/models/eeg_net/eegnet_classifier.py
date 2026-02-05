@@ -1,7 +1,5 @@
-"""
-EEGNet Classifier with integrated training and data preparation
-"""
-
+import os
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 import numpy as np
 import tensorflow as tf
 from tensorflow.keras.callbacks import EarlyStopping
@@ -36,30 +34,15 @@ class EEGNetClassifier(BaseEEGClassifier):
                 pass
     
     def prepare_data(self, X_train, y_train, X_eval, y_eval, subject_ids=None):
-        """Prepare data with per-subject normalization and reshaping"""
-        def normalize_and_reshape(X, y, subject_ids=None):
-            if subject_ids is not None:
-                # Per-subject z-score normalization
-                X_scaled = np.zeros_like(X)
-                unique_subs = np.unique(subject_ids)
-                
-                for sub_id in unique_subs:
-                    sub_indices = np.where(subject_ids == sub_id)[0]
-                    sub_data = X[sub_indices]
-                    sub_mean = np.mean(sub_data, axis=(0, 2), keepdims=True)
-                    sub_std = np.std(sub_data, axis=(0, 2), keepdims=True)
-                    X_scaled[sub_indices] = (sub_data - sub_mean) / (sub_std + 1e-6)
-            else:
-                # Global normalization if no subject IDs
-                X_scaled = (X - np.mean(X)) / (np.std(X) + 1e-6)
-            
+        """Prepare data with reshaping for Keras (scaling already done in data loader)"""
+        def reshape_for_keras(X, y):
             # Reshape for Keras (add channel dimension)
-            X_reshaped = X_scaled.reshape(X_scaled.shape[0], X_scaled.shape[1], X_scaled.shape[2], 1)
+            X_reshaped = X.reshape(X.shape[0], X.shape[1], X.shape[2], 1)
             return X_reshaped, np.array(y)
         
-        # Process datasets
-        X_train_prep, y_train_prep = normalize_and_reshape(X_train, y_train, subject_ids)
-        X_eval_prep, y_eval_prep = normalize_and_reshape(X_eval, y_eval)
+        # Process datasets - only reshape since scaling is done in data loader
+        X_train_prep, y_train_prep = reshape_for_keras(X_train, y_train)
+        X_eval_prep, y_eval_prep = reshape_for_keras(X_eval, y_eval)
             
         return X_train_prep, y_train_prep, X_eval_prep, y_eval_prep
     

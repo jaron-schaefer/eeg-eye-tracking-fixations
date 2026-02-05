@@ -8,7 +8,7 @@ PARAM_GRIDS = {
         'F1': [8, 16],
         'F2': [16],
         'dropoutRate': [0.3],
-        'learning_rate': [0.001, 0.0005],
+        'lr': [0.001, 0.0005],
     },
     'cbramod':{
         'dropout': [0.1],
@@ -18,7 +18,7 @@ PARAM_GRIDS = {
         'label_smoothing': [0.0]
     },
     'csp': {
-        'n_components': [2, 4, 6],
+        'n_components': [6, 10, 15],
         'reg': [0.01, 0.05, 0.1],
         'clf_type': ['lda', 'rf']
     },

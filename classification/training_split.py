@@ -6,10 +6,6 @@ def split_normal(X, y, stimulus_summary=None, test_size=0.2, val_size=0.2, seed=
     """
     Random train/val/test split (works with any data).
     """
-    print("\n" + "="*70)
-    print("RANDOM TRAIN/VAL/TEST SPLIT")
-    print("="*70)
-    
     has_stim = stimulus_summary is not None
     
     # First split: train+val vs test
@@ -37,15 +33,9 @@ def split_normal(X, y, stimulus_summary=None, test_size=0.2, val_size=0.2, seed=
     
     gc.collect()
     
-    # Print stats
-    print(f"\nTrain: {X_train.shape[0]} samples ({X_train.shape[0]/len(y)*100:.1f}%)")
-    print(f"  {dict(zip(*np.unique(y_train, return_counts=True)))}")
-    
-    print(f"\nVal:   {X_val.shape[0]} samples ({X_val.shape[0]/len(y)*100:.1f}%)")
-    print(f"  {dict(zip(*np.unique(y_val, return_counts=True)))}")
-    
-    print(f"\nTest:  {X_test.shape[0]} samples ({X_test.shape[0]/len(y)*100:.1f}%)")
-    print(f"  {dict(zip(*np.unique(y_test, return_counts=True)))}")
+    # Summary
+    total_samples = len(y_train) + len(y_val) + len(y_test)
+    print(f"Split data: {len(y_train)} train, {len(y_val)} val, {len(y_test)} test (total: {total_samples})")
     
     if has_stim:
         return X_train, X_val, X_test, y_train, y_val, y_test, stim_train, stim_val, stim_test
@@ -57,28 +47,22 @@ def split_leave_n_out_generator(X, y, subjects, stimulus_summary=None, n_test_su
     """
     Leave-N-out cross-validation generator (yields one fold at a time for RAM efficiency).
     """
-    print("\n" + "="*70)
-    print(f"LEAVE-{n_test_subjects}-OUT CROSS-VALIDATION")
-    print("="*70)
-    
     has_stim = stimulus_summary is not None
+    
+    # Convert subjects to numpy array for boolean indexing
+    subjects = np.array(subjects)
     
     unique_subjects = np.unique(subjects)
     n_subjects = len(unique_subjects)
     n_folds = n_subjects // n_test_subjects
     
-    print(f"Total subjects: {n_subjects}")
-    print(f"Folds: {n_folds} (each with {n_test_subjects} test subjects)")
-    
     # Use fixed seed for reproducibility
     np.random.seed(seed)
     shuffled_subjects = np.random.permutation(unique_subjects)
     
+    print(f"Leave-{n_test_subjects}-out CV: {n_folds} folds with {n_subjects} subjects")
+    
     for fold_idx in range(n_folds):
-        print(f"\n{'─'*70}")
-        print(f"Fold {fold_idx + 1}/{n_folds}")
-        print(f"{'─'*70}")
-        
         # Get test subjects for this fold
         test_subject_indices = np.arange(fold_idx * n_test_subjects, 
                                          (fold_idx + 1) * n_test_subjects)
@@ -123,33 +107,9 @@ def split_leave_n_out_generator(X, y, subjects, stimulus_summary=None, n_test_su
             del stim_train_val
         gc.collect()
         
-        # Print fold stats
-        print(f"Test subjects: {list(test_subjects)}")
-        print(f"\nTrain: {X_train.shape[0]} samples")
-        print(f"  {dict(zip(*np.unique(y_train, return_counts=True)))}")
-        print(f"\nVal:   {X_val.shape[0]} samples")
-        print(f"  {dict(zip(*np.unique(y_val, return_counts=True)))}")
-        print(f"\nTest:  {X_test.shape[0]} samples")
-        print(f"  {dict(zip(*np.unique(y_test, return_counts=True)))}")
-        
-        # Build fold dictionary
-        fold_dict = {
-            'X_train': X_train,
-            'X_val': X_val,
-            'X_test': X_test,
-            'y_train': y_train,
-            'y_val': y_val,
-            'y_test': y_test,
-            'fold_idx': fold_idx,
-            'test_subjects': test_subjects
-        }
-        
-        # Add stimulus summary if provided
+        # Yield fold as tuple to match split_normal format
         if has_stim:
-            fold_dict['stim_train'] = stim_train
-            fold_dict['stim_val'] = stim_val
-            fold_dict['stim_test'] = stim_test
-        
-        # Yield fold
-        yield fold_dict
+            yield X_train, X_val, X_test, y_train, y_val, y_test, stim_train, stim_val, stim_test
+        else:
+            yield X_train, X_val, X_test, y_train, y_val, y_test, None, None, None
 

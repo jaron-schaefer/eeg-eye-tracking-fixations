@@ -95,10 +95,10 @@ class BaseEEGClassifier(abc.ABC):
         # Check predictions
         unique_preds = np.unique(preds)
         if len(unique_preds) == 1:
-            print(f"\\n⚠️  WARNING: Only predicted class {unique_preds[0]}")
+            print(f"\\nOnly predicted class {unique_preds[0]}")
         else:
             pred_counts = dict(zip(*np.unique(preds, return_counts=True)))
-            print(f"\\n✅ Predictions: {pred_counts}")
+            print(f"\\nPredictions: {pred_counts}")
         
         return results
     

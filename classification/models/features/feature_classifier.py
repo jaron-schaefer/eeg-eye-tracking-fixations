@@ -224,36 +224,6 @@ class FeatureClassifier(BaseEEGClassifier):
         
         return results
 
-
-    
-    def _scale_per_subject(self, X_train, X_eval, 
-                                    subject_ids_train, subject_ids_eval):
-        """Scale features per subject (simplified version)"""
-        X_train_scaled = np.zeros_like(X_train)
-        X_eval_scaled = np.zeros_like(X_eval)
-        
-        # Train scalers on training subjects
-        subject_ids_train = np.array(subject_ids_train)
-        for subj in np.unique(subject_ids_train):
-            subj_idx = np.where(subject_ids_train == subj)[0]
-            scaler = StandardScaler()
-            X_train_scaled[subj_idx] = scaler.fit_transform(X_train[subj_idx])
-            self.scalers[subj] = scaler
-        
-        # Apply to evaluation set
-        if subject_ids_eval is not None:
-            subject_ids_eval = np.array(subject_ids_eval)
-            for subj in np.unique(subject_ids_eval):
-                subj_idx = np.where(subject_ids_eval == subj)[0]
-                if subj in self.scalers:
-                    X_eval_scaled[subj_idx] = self.scalers[subj].transform(X_eval[subj_idx])
-                else:
-                    # Use global scaler if subject not in training
-                    scaler = StandardScaler()
-                    X_eval_scaled[subj_idx] = scaler.fit_transform(X_eval[subj_idx])
-        
-        return X_train_scaled, X_eval_scaled
-
     def predict(self, X: np.ndarray) -> np.ndarray:
         if not self.is_trained:
             raise ValueError("Model must be trained first")

@@ -21,7 +21,6 @@ from data.data_configs import CBRAMOD_CHANNELS, SUBJECTS, DEFAULT_EEG_CHANNELS
 from classification.training_split import split_normal, split_leave_n_out_generator, split_leave_n_out_generator, split_leave_n_out_generator
 
 def cleanup():
-    """Aggressive CPU and GPU memory cleanup to minimize RAM usage."""
     # Multiple garbage collection passes for CPU RAM optimization
     for _ in range(3):
         gc.collect()
@@ -33,7 +32,6 @@ def cleanup():
     
     # Print CPU RAM usage for monitoring
     ram_usage = psutil.virtual_memory()
-    print(f"    CPU RAM: {ram_usage.percent:.1f}% ({ram_usage.used/1024**3:.1f}GB/{ram_usage.total/1024**3:.1f}GB)")
 
 
 def get_model(model_name: str, params: dict):
@@ -70,7 +68,15 @@ def load_model_data(model_name, subjects, selected_channels=None, split_strategy
     if selected_channels is None:
         selected_channels = CBRAMOD_CHANNELS
 
-    if model_name in ['eegnet', 'cbramod', 'csp']:
+    if model_name in ['eegnet', 'csp']:
+        # Use scaled data loader for models that benefit from per-subject normalization
+        X, y, subject_ids, stimulus_summary = DataLoader.load_labeled_eeg_data_scaled(
+            subjects=subjects, 
+            channels=selected_channels
+        )
+        X = X.astype(np.float32)  # Convert after loading
+    elif model_name == 'cbramod':
+        # Use unscaled data loader for CBraMod (does its own normalization)
         X, y, subject_ids, stimulus_summary = DataLoader.load_labeled_eeg_data(
             subjects=subjects, 
             channels=selected_channels
@@ -106,15 +112,15 @@ def load_model_data(model_name, subjects, selected_channels=None, split_strategy
             stimulus_summary=stimulus_summary,
         )
 
-        result = next(fold_generator)[:]
+        X_train, X_val, X_test, y_train, y_val, y_test, stim_train, stim_val, stim_test = next(fold_generator)
     else:
         # Use split_normal function with stimulus summary support
-        result = split_normal(
+        X_train, X_val, X_test, y_train, y_val, y_test, stim_train, stim_val, stim_test = split_normal(
             X, y,
             stimulus_summary=stimulus_summary,
         )
 
-    return result
+    return X_train, X_val, X_test, y_train, y_val, y_test, stim_train, stim_val, stim_test
 
 def evaluate_single_model(model_name, subjects, params, selected_channels=None, split_strategy="normal", stimulus_summary=False):
     
@@ -142,7 +148,6 @@ def evaluate_single_model(model_name, subjects, params, selected_channels=None, 
 
 def optimize_single_model(model_name, subjects, param_grid, max_trials=15, split_strategy='normal', 
                          selected_channels=None):
-    """Optimize single model with CPU RAM optimization"""
 
     X_train, X_val, X_test, y_train, y_val, y_test = load_model_data(model_name, subjects, selected_channels)
 
