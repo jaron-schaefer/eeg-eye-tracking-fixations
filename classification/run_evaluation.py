@@ -1,7 +1,7 @@
 import json
 import numpy as np
 from pathlib import Path
-from classification.training_utils import evaluate_single_model
+from classification.model_training import evaluate_single_model
 from data.data_configs import SUBJECTS
 
 
@@ -73,23 +73,43 @@ def evaluate_and_save(models: dict, split_strategy: str, subjects, out_filename:
         # Flatten any single-item lists to scalars
         flat_params = {k: (v[0] if isinstance(v, (list, tuple)) and len(v) == 1 else v) for k, v in params.items()}
         res = evaluate_single_model(model_name, subjects, flat_params, split_strategy=split_strategy)
-        results[model_name] = res
-        with open(out_file, 'w') as f:
-            json.dump(make_jsonable(results), f, indent=2)
+        
+        current_score = res.get("balanced_acc", res.get("score", 0))
+        
+        # Check if we should update the result
+        should_save = True
+        if model_name in results:
+            old_score = results[model_name].get('balanced_acc', results[model_name].get('score', 0))
+            if current_score <= old_score:
+                should_save = False
+                print(f"  ⚠️  {model_name}: New score {current_score:.4f} not better than existing {old_score:.4f}, skipping")
+
+        if should_save:
+            # Save only essential metrics, not full results
+            results[model_name] = {
+                "score": current_score,
+                "balanced_acc": current_score,
+                "params": flat_params
+            }
+            print(f"  💾 Updated {model_name} with score {current_score:.4f}")
+            
+            # Save immediately after each update
+            with open(out_file, 'w') as f:
+                json.dump(make_jsonable(results), f, indent=2)
 
 # Run for both strategies
 for strategy, out_file in [('normal', 'evaluation_results_normal.json'), ('leave_one_out', 'evaluation_results_leave_one_out.json')]:
     optimal = load_optimal_parameters(strategy)
     to_eval = select_best_models(optimal)
 
-    # params =  {"et_rf": {
-    # "params": {
-    #   "max_depth": 30,
-    #   "min_samples_leaf": 2,
-    #   "min_samples_split": 5,
-    #   "n_estimators": 200
-    # }
-    # }}
+    params =  {"et_rf": {
+    "params": {
+      "max_depth": 30,
+      "min_samples_leaf": 2,
+      "min_samples_split": 5,
+      "n_estimators": 200
+    }
+    }}
 
     # params =  {'cbramod': {
     # 'params':{
@@ -99,4 +119,5 @@ for strategy, out_file in [('normal', 'evaluation_results_normal.json'), ('leave
     #     'lr': 0.0001,
     #     'label_smoothing': 0.0
     # }}}
-    evaluate_and_save(to_eval, strategy, SUBJECTS[:4], out_file)
+
+    evaluate_and_save(to_eval, strategy, SUBJECTS, out_file)

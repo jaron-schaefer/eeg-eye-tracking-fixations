@@ -129,8 +129,6 @@ def evaluate_single_model(model_name, subjects, params, selected_channels=None, 
     
     X_train, X_val, X_test, y_train, y_val, y_test, stim_train, stim_val, stim_test = training_data[:]
     # Combine train and val for evaluation (since we're not optimizing)
-    X = np.vstack([X_train, X_val])
-    y = np.concatenate([y_train, y_val])
     
     # Create model with optimal parameters (always with balanced class weights)
     model = get_model(model_name, params)
@@ -138,7 +136,27 @@ def evaluate_single_model(model_name, subjects, params, selected_channels=None, 
     if model_name == "features_rf" and stimulus_summary:
         results = model.train(X, y, X_test, y_test, eval_stimulus_summaries=stim_test)
     else:
-        results = model.train(X, y, X_test, y_test)
+
+        if model_name == "eegnet" or model_name == "cbramod":
+            # Split validation set in half: use part for training, part for validation
+            n_val = len(X_val)
+            split_idx = n_val // 2
+            
+            # Split validation data
+            X_val_for_train, X_val_for_val = X_val[:split_idx], X_val[split_idx:]
+            y_val_for_train, y_val_for_val = y_val[:split_idx], y_val[split_idx:]
+            
+            # Combine original training data with half of validation data
+            X_train_combined = np.vstack([X_train, X_val_for_train])
+            y_train_combined = np.concatenate([y_train, y_val_for_train])
+            
+            # Train with combined training data and remaining validation data
+            results = model.train(X_train_combined, y_train_combined, X_test, y_test, 
+                                X_val=X_val_for_val, y_val=y_val_for_val)
+        else:
+            X = np.vstack([X_train, X_val])
+            y = np.concatenate([y_train, y_val])
+            results = model.train(X, y, X_test, y_test)
 
 
     del model, X, y, X_train, X_test, y_train, y_test, X_val, y_val, stim_train, stim_val, stim_test
@@ -149,7 +167,7 @@ def evaluate_single_model(model_name, subjects, params, selected_channels=None, 
 def optimize_single_model(model_name, subjects, param_grid, max_trials=15, split_strategy='normal', 
                          selected_channels=None):
 
-    X_train, X_val, X_test, y_train, y_val, y_test = load_model_data(model_name, subjects, selected_channels)
+    X_train, X_val, X_test, y_train, y_val, y_test, _, _, _ = load_model_data(model_name, subjects, selected_channels)
 
     # Clean up test data since we don't need it for optimization
     del X_test, y_test

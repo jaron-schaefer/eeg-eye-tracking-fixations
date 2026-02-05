@@ -83,7 +83,7 @@ class CBraModClassifier(BaseEEGClassifier):
         self.freeze_backbone = freeze_backbone
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
-    def prepare_data(self, X_train, y_train, X_eval, y_eval, 
+    def prepare_data(self, X_train, y_train, X_eval, y_eval, X_val=None, y_val=None, 
                     subject_ids=None, orig_fs=EEG_SAMPLE_FREQUENCY):
         """Prepare data for CBraMod with resampling, filtering, and patching"""
         
@@ -135,18 +135,36 @@ class CBraModClassifier(BaseEEGClassifier):
         # Process all datasets
         X_train_prep, y_train_prep = process_data(X_train, y_train, subject_ids)
         X_eval_prep, y_eval_prep = process_data(X_eval, y_eval)
-            
-        return X_train_prep, y_train_prep, X_eval_prep, y_eval_prep
+        
+        if X_val is not None and y_val is not None:
+            X_val_prep, y_val_prep = process_data(X_val, y_val, subject_ids)
+            return X_train_prep, y_train_prep, X_eval_prep, y_eval_prep, X_val_prep, y_val_prep
+        else:
+            return X_train_prep, y_train_prep, X_eval_prep, y_eval_prep
     
-    def train(self, X_train, y_train, X_eval, y_eval, subject_ids=None, verbose=True):
-        """Train CBraMod classifier following paper's binary classification approach"""
+    def train(self, X_train, y_train, X_eval, y_eval, X_val=None, y_val=None, verbose=True, **kwargs):
+        """Train CBraMod classifier with smart validation/evaluation logic"""
         if verbose:
             gpu_info = f"GPU: {torch.cuda.get_device_name(0)}" if torch.cuda.is_available() else "CPU"
             print(f"\n[CBraMod Training] Device: {gpu_info}, LR: {self.lr}, Epochs: {self.epochs}, Batch: {self.batch_size}")
         
-        # Prepare data
-        X_train_prep, y_train_prep, X_eval_prep, y_eval_prep = self.prepare_data(
-            X_train, y_train, X_eval, y_eval, subject_ids)
+        # Determine validation strategy
+        use_separate_val = X_val is not None and y_val is not None
+        
+        if use_separate_val:
+            # Optimization phase: separate val and eval data
+            data_prep = self.prepare_data(X_train, y_train, X_eval, y_eval, X_val, y_val)
+            X_train_prep, y_train_prep, X_eval_prep, y_eval_prep, X_val_prep, y_val_prep = data_prep
+            validation_data = (X_val_prep, y_val_prep)
+            if verbose:
+                print(f"  Using separate validation data ({len(y_val)} samples)")
+        else:
+            # Evaluation phase: use eval for both validation and evaluation
+            X_train_prep, y_train_prep, X_eval_prep, y_eval_prep = self.prepare_data(
+                X_train, y_train, X_eval, y_eval)
+            validation_data = (X_eval_prep, y_eval_prep)
+            if verbose:
+                print(f"  Using eval data for validation ({len(y_eval)} samples)")
         
         # Check for class imbalance (common in target detection)
         class_counts = np.bincount(y_train_prep.astype(int))
@@ -156,10 +174,17 @@ class CBraModClassifier(BaseEEGClassifier):
         # Create data loaders
         train_ds = TensorDataset(torch.from_numpy(X_train_prep).float(), 
                                 torch.from_numpy(y_train_prep.astype(np.float32)))
+        
+        # Create validation loader using the determined validation data
+        val_ds = TensorDataset(torch.from_numpy(validation_data[0]).float(),
+                             torch.from_numpy(validation_data[1].astype(np.float32)))
+        
+        # Create eval loader for final evaluation (always X_eval_prep)
         eval_ds = TensorDataset(torch.from_numpy(X_eval_prep).float(),
                               torch.from_numpy(y_eval_prep.astype(np.float32)))
         
         train_loader = DataLoader(train_ds, batch_size=self.batch_size, shuffle=True, pin_memory=True)
+        val_loader = DataLoader(val_ds, batch_size=self.batch_size, shuffle=False, pin_memory=True)
         eval_loader = DataLoader(eval_ds, batch_size=self.batch_size, shuffle=False, pin_memory=True)
         
         # Build model
@@ -254,12 +279,12 @@ class CBraModClassifier(BaseEEGClassifier):
                     train_preds.extend((probs > 0.5).float().cpu().numpy())
                     train_labels.extend(y_batch.cpu().numpy())
             
-            # Evaluation phase
+            # Validation phase (using val_loader for early stopping)
             self.model.eval()
-            eval_preds, eval_labels = [], []
+            val_preds, val_labels = [], []
             
             with torch.no_grad():
-                for X_batch, y_batch in eval_loader:
+                for X_batch, y_batch in val_loader:
                     X_batch = X_batch.to(self.device)
                     
                     if scaler is not None:
@@ -269,13 +294,13 @@ class CBraModClassifier(BaseEEGClassifier):
                         logits = self.model(X_batch).squeeze(-1)
                     
                     probs = torch.sigmoid(logits)
-                    eval_preds.extend((probs > 0.5).float().cpu().numpy())
-                    eval_labels.extend(y_batch.numpy())
+                    val_preds.extend((probs > 0.5).float().cpu().numpy())
+                    val_labels.extend(y_batch.numpy())
             
-            # Calculate accuracies and positive prediction rate
+            # Calculate validation accuracies and positive prediction rate
             train_acc = balanced_accuracy_score(train_labels, train_preds)
-            eval_acc = balanced_accuracy_score(eval_labels, eval_preds)
-            eval_pos_rate = float(np.mean(eval_preds)) if len(eval_preds) > 0 else 0.0
+            val_acc = balanced_accuracy_score(val_labels, val_preds)
+            val_pos_rate = float(np.mean(val_preds)) if len(val_preds) > 0 else 0.0
             
             # Update learning rate scheduler
             scheduler.step()
@@ -283,11 +308,11 @@ class CBraModClassifier(BaseEEGClassifier):
             
             if verbose:
                 print(f"  Epoch {epoch+1:2d} | Loss: {train_loss/len(train_loader):.4f} | "
-                      f"Train: {train_acc:.4f} | Eval: {eval_acc:.4f} | PosRate: {eval_pos_rate:.2f} | LR: {current_lr:.2e}")
+                      f"Train: {train_acc:.4f} | Val: {val_acc:.4f} | PosRate: {val_pos_rate:.2f} | LR: {current_lr:.2e}")
             
             # Early stopping
-            if eval_acc > best_eval_acc:
-                best_eval_acc = eval_acc
+            if val_acc > best_eval_acc:
+                best_eval_acc = val_acc
                 best_weights = self.model.state_dict().copy()
                 patience = 0
             else:
@@ -307,7 +332,7 @@ class CBraModClassifier(BaseEEGClassifier):
         results = self._evaluate_torch(X_eval_prep, y_eval_prep, "Evaluation")
         
         # Cleanup
-        del train_loader, eval_loader
+        del train_loader, val_loader
         torch.cuda.empty_cache()
         gc.collect()
         

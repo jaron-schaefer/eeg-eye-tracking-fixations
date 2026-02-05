@@ -27,13 +27,15 @@ class BaseEEGClassifier(abc.ABC):
     
     @abc.abstractmethod
     def prepare_data(self, X_train: np.ndarray, y_train: np.ndarray, 
-                    X_eval: np.ndarray, y_eval: np.ndarray) -> Tuple[Any, ...]:
+                    X_eval: np.ndarray, y_eval: np.ndarray,
+                    X_val: Optional[np.ndarray] = None, y_val: Optional[np.ndarray] = None) -> Tuple[Any, ...]:
         """Preprocess data for model-specific format"""
         pass
     
     @abc.abstractmethod
     def train(self, X_train: np.ndarray, y_train: np.ndarray,
              X_eval: np.ndarray, y_eval: np.ndarray, 
+             X_val: Optional[np.ndarray] = None, y_val: Optional[np.ndarray] = None,
              **kwargs) -> Dict[str, Any]:
         """Train the model with evaluation data (validation during optimization, test during final evaluation)"""
         pass

@@ -33,7 +33,7 @@ class EEGNetClassifier(BaseEEGClassifier):
             except RuntimeError:
                 pass
     
-    def prepare_data(self, X_train, y_train, X_eval, y_eval, subject_ids=None):
+    def prepare_data(self, X_train, y_train, X_eval, y_eval, X_val=None, y_val=None):
         """Prepare data with reshaping for Keras (scaling already done in data loader)"""
         def reshape_for_keras(X, y):
             # Reshape for Keras (add channel dimension)
@@ -43,17 +43,36 @@ class EEGNetClassifier(BaseEEGClassifier):
         # Process datasets - only reshape since scaling is done in data loader
         X_train_prep, y_train_prep = reshape_for_keras(X_train, y_train)
         X_eval_prep, y_eval_prep = reshape_for_keras(X_eval, y_eval)
-            
-        return X_train_prep, y_train_prep, X_eval_prep, y_eval_prep
+        
+        # Process validation data if provided
+        if X_val is not None and y_val is not None:
+            X_val_prep, y_val_prep = reshape_for_keras(X_val, y_val)
+            return X_train_prep, y_train_prep, X_eval_prep, y_eval_prep, X_val_prep, y_val_prep
+        else:
+            return X_train_prep, y_train_prep, X_eval_prep, y_eval_prep
     
-    def train(self, X_train, y_train, X_eval, y_eval, subject_ids=None, verbose=True):
-        """Train EEGNet classifier"""
+    def train(self, X_train, y_train, X_eval, y_eval, X_val=None, y_val=None, verbose=True, **kwargs):
+        """Train EEGNet classifier with smart validation/evaluation logic"""
         if verbose:
             print(f"\n[EEGNet Training] LR: {self.lr}, Epochs: {self.epochs}, Dropout: {self.dropoutRate}")
         
-        # Prepare data
-        X_train_prep, y_train_prep, X_eval_prep, y_eval_prep = self.prepare_data(
-            X_train, y_train, X_eval, y_eval, subject_ids)
+        # Determine validation strategy
+        use_separate_val = X_val is not None and y_val is not None
+        
+        if use_separate_val:
+            # Optimization phase: separate val and eval data
+            data_prep = self.prepare_data(X_train, y_train, X_eval, y_eval, X_val, y_val)
+            X_train_prep, y_train_prep, X_eval_prep, y_eval_prep, X_val_prep, y_val_prep = data_prep
+            validation_data = (X_val_prep, y_val_prep)
+            if verbose:
+                print(f"  Using separate validation data ({len(y_val)} samples)")
+        else:
+            # Evaluation phase: use eval for both validation and evaluation
+            X_train_prep, y_train_prep, X_eval_prep, y_eval_prep = self.prepare_data(
+                X_train, y_train, X_eval, y_eval)
+            validation_data = (X_eval_prep, y_eval_prep)
+            if verbose:
+                print(f"  Using eval data for validation ({len(y_eval)} samples)")
         
         # Build model for binary classification
         nb_classes = 1  # Single sigmoid output for binary classification
@@ -100,7 +119,7 @@ class EEGNetClassifier(BaseEEGClassifier):
         # Train model
         history = self.model.fit(
             X_train_prep, y_train_prep,
-            validation_data=(X_eval_prep, y_eval_prep),
+            validation_data=validation_data,
             epochs=self.epochs,
             batch_size=self.batch_size,
             class_weight=class_weight,
@@ -108,8 +127,8 @@ class EEGNetClassifier(BaseEEGClassifier):
             verbose=1 if verbose else 0
         )
         
-        # Check for model collapse
-        val_probs = self.model.predict(X_eval_prep, verbose=0).flatten()
+        # Check for model collapse on validation data
+        val_probs = self.model.predict(validation_data[0], verbose=0).flatten()
         prob_range = np.max(val_probs) - np.min(val_probs)
         
         if verbose:
@@ -119,7 +138,7 @@ class EEGNetClassifier(BaseEEGClassifier):
         
         self.is_trained = True
         
-        # Evaluate
+        # Always evaluate on eval data (separate from validation)
         results = self.evaluate(X_eval_prep, y_eval_prep, "Evaluation")
         
         return results

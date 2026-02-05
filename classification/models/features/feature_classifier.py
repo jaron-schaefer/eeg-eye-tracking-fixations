@@ -107,7 +107,9 @@ class FeatureClassifier(BaseEEGClassifier):
         return model_class(**self.model_params)
     
     def train(self, X_train: np.ndarray, y_train: np.ndarray,
-             X_eval: np.ndarray, y_eval: np.ndarray, eval_stimulus_summaries: Optional[List[str]] = None,
+             X_eval: np.ndarray, y_eval: np.ndarray, 
+             X_val: Optional[np.ndarray] = None, y_val: Optional[np.ndarray] = None,
+             eval_stimulus_summaries: Optional[List[str]] = None,
              **kwargs) -> Dict[str, Any]:
         """Train the feature classifier"""
         

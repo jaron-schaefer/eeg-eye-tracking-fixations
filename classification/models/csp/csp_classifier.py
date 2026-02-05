@@ -30,7 +30,7 @@ class CSPClassifier(BaseEEGClassifier):
             
         return X_train_prep, y_train_prep, X_eval_prep, y_eval_prep
     
-    def train(self, X_train, y_train, X_eval, y_eval, verbose=True):
+    def train(self, X_train, y_train, X_eval, y_eval, X_val=None, y_val=None, verbose=True, **kwargs):
         if verbose:
             print(f"\\n[CSP Training] Components: {self.n_components}, Classifier: {self.clf_type.upper()}")
         

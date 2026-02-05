@@ -1,5 +1,5 @@
 
-from classification.training_utils import optimize_single_model
+from classification.model_training import optimize_single_model
 from data.data_configs import SUBJECTS
 
 PARAM_GRIDS = {
@@ -43,6 +43,14 @@ PARAM_GRIDS = {
         'C': [0.01, 0.1, 1.0],
         'kernel': ['rbf', 'linear'],
         'gamma': ['scale', 'auto']
+    }
+}
+
+PARAM_GRIDS = {
+    'csp': {
+        'n_components': [6, 10, 15],
+        'reg': [0.01, 0.05, 0.1],
+        'clf_type': ['lda', 'rf']
     }
 }
 
