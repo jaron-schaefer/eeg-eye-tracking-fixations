@@ -97,27 +97,9 @@ def evaluate_and_save(models: dict, split_strategy: str, subjects, out_filename:
             with open(out_file, 'w') as f:
                 json.dump(make_jsonable(results), f, indent=2)
 
-# Run for both strategies
-for strategy, out_file in [('normal', 'evaluation_results_normal.json'), ('leave_one_out', 'evaluation_results_leave_one_out.json')]:
+# Run for both strategies ('normal', 'evaluation_results_normal.json'),
+for strategy, out_file in [ ('leave_one_out', 'evaluation_results_leave_one_out.json')]:
     optimal = load_optimal_parameters(strategy)
     to_eval = select_best_models(optimal)
-
-    params =  {"et_rf": {
-    "params": {
-      "max_depth": 30,
-      "min_samples_leaf": 2,
-      "min_samples_split": 5,
-      "n_estimators": 200
-    }
-    }}
-
-    # params =  {'cbramod': {
-    # 'params':{
-    #     'dropout': 0.1,
-    #     'hidden_dim': 200,
-    #     'weight_decay': 0.05,
-    #     'lr': 0.0001,
-    #     'label_smoothing': 0.0
-    # }}}
 
     evaluate_and_save(to_eval, strategy, SUBJECTS, out_file)

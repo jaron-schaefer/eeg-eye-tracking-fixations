@@ -267,7 +267,7 @@ class DataLoader:
                                 post_ms=POST_WINDOW_MS,
                                 fs=EEG_SAMPLE_FREQUENCY):
         """
-        Load EEG data AND stimulus summary together.
+        Load EEG data AND stimulus summary together. No normalization.
         """
         
         all_X, all_y, all_subjects, all_stim = [], [], [], []

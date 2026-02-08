@@ -14,27 +14,27 @@ def main():
     subjects = SUBJECTS
     
     # Step 1: Download dataset (if needed)
-    # download_dataset()
+    download_dataset()
     
     # Step 2: Label eye tracking data
     print("\\n1. Labeling eye tracking data...")
-    label_et_data(["P02"])
+    label_et_data(subjects)
     
     # Step 3: Select eye tracking trials
     print("\\n2. Selecting eye tracking trials...")
-    # select_et_trials(subjects)
+    select_et_trials(subjects)
 
     # Step 4: Label EEG data (uncomment to run)
     print("\\n3. Labeling EEG data...")
-    # label_eeg_data(subjects)
+    label_eeg_data(subjects)
     
     # Step 5: Extract EEG features (uncomment to run)
     print("\\n4. Extracting EEG features...")
-    # extract_and_save_features_for_subjects(subjects[8:])
+    extract_and_save_features_for_subjects(subjects)
     
     # Step 6: Process eye tracking features (uncomment to run)  
     print("\\n5. Processing eye tracking features...")
-    # extract_et_features(subjects)
+    extract_et_features(subjects)
     
     print("\\n=== DATA PREPARATION COMPLETE ===")
 

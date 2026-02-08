@@ -1,15 +1,61 @@
-# Eye‑EEG: Target vs. Non‑Target Fixation Classification
+# EEG-Eye Tracking Classification Project
 
-This work uses the public EEGET‑RSOD dataset from the paper “A simultaneous EEG and eye‑tracking dataset for remote sensing object detection,” reproducing and extending its core analysis: predicting whether a fixation landed on a target (airplane).
+## Abstract
 
-## Summary
-This repository provides a compact pipeline: load raw EEG/ET, align and label fixations, extract fixation‑locked EEG epochs, baseline‑correct, and optionally engineer features. We compare several models (EEGNet, CSP, CBraMod, Random Forest on features) with subject‑wise splits to avoid leakage. The goal is a clear, end‑to‑end reference for target vs. non‑target fixation classification on remote‑sensing imagery.
+This study investigates the classification of eye fixations on target objects (airplanes) in remote sensing imagery using synchronized EEG and eye-tracking signals from the EEGET-RSOD dataset introduced by He et al. (2025). We implement and compare multiple machine learning approaches including deep learning models (EEGNet, CBraMod) and traditional methods (CSP, Random Forest) to predict whether a fixation landed on a target or non-target region.
 
-## Data
-We use the EEGET‑RSOD dataset (“A simultaneous EEG and eye‑tracking dataset for remote sensing object detection”). Place its contents under `data/raw_data/` (e.g., `EEG_clean/`, `ET_clip/`, `Stimuli/`, `label/`). EEG is converted from volts to microvolts (μV) on load; epochs are baseline‑corrected before saving.
+## Dataset
 
-## Pipeline
-Run the preparation script to label fixations and create training data. It produces per‑subject NPZs in `data/labeled_eeg_data/` (epochs `X`, labels `y`, `time`, `channel_names`, `sampling_rate`, and a `stimulus_summary` per fixation) and, if enabled, feature CSVs under `data/features/`.
+The project uses the [**EEGET-RSOD dataset**](https://figshare.com/articles/dataset/EEGET-RSOD/26943565), which contains:
+- EEG signals recorded during visual search tasks
+- Eye-tracking data with fixation coordinates
+- Remote sensing images with airplane targets
+- Synchronized data from multiple participants
 
 
-Training lives in the `classification/` notebooks. Use `classification/training_split.py` for randomized or leave‑N‑out subject‑wise splits. Adjust channels, subjects, and CV in `data/data_configs.py`.
+## Methodology
+
+The pipeline includes:
+
+1. **Data Preprocessing**: EEG signal filtering, eye-tracking data alignment, and fixation-target labeling
+2. **Data Quality Assurance**: Notebooks to check time alignment, ET calibration quality, and selection of best subjects
+3. **Feature Extraction**: Time-domain and frequency-domain EEG features, fixation-locked epochs
+4. **Classification Models**:
+   - **EEGNet**: Deep learning architecture specialized for EEG classification
+   - **CBraMod**: Transformer-based EEG classifier (pretrained)
+   - **CSP**: Common Spatial Patterns with traditional classifiers
+   - **Feature-based Classifier**: Engineered EEG and eye-tracking features with Random Forest
+5. **Hyperparameter Optimization**: Automated tuning for each model architecture
+6. **Evaluation**: Performance assessment using both pooled and cross-subject validation
+
+## Quick Start
+
+### Installation
+Install the required Python dependencies:
+```bash
+pip install -r requirements.txt
+```
+
+### Data Preparation
+Download and preprocess the EEGET-RSOD dataset. This step handles EEG signal filtering, eye-tracking alignment, and fixation labeling.
+> **Note**: This step downloads the complete dataset (~several GB) and processes all EEG/eye-tracking files, which may take 90+ minutes depending on your internet connection and system performance.
+
+```bash
+python -m data.run_data_preparation
+```
+
+### Model Optimization
+Run hyperparameter optimization to find the best parameters for each classification model (EEGNet, CBraMod, CSP, Random Forest):
+```bash
+python -m classification.run_optimization
+```
+
+### Model Evaluation
+Evaluate the optimized models using both pooled and cross-subject validation to assess performance and generalizability:
+```bash
+python -m classification.run_evaluation
+```
+
+## Results
+
+Optimization and classification results are automatically saved to `classification/results/` after running the evaluation pipeline.

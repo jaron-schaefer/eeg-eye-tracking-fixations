@@ -153,13 +153,16 @@ def evaluate_single_model(model_name, subjects, params, selected_channels=None, 
             # Train with combined training data and remaining validation data
             results = model.train(X_train_combined, y_train_combined, X_test, y_test, 
                                 X_val=X_val_for_val, y_val=y_val_for_val)
+            
+            del X_train_combined, y_train_combined, X_val_for_train, X_val_for_val, y_val_for_train, y_val_for_val
         else:
             X = np.vstack([X_train, X_val])
             y = np.concatenate([y_train, y_val])
             results = model.train(X, y, X_test, y_test)
+            del X, y
 
 
-    del model, X, y, X_train, X_test, y_train, y_test, X_val, y_val, stim_train, stim_val, stim_test
+    del model, X_train, X_test, y_train, y_test, X_val, y_val, stim_train, stim_val, stim_test
     cleanup()
     
     return results
