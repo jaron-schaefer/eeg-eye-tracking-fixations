@@ -2,6 +2,7 @@ import gc
 import numpy as np
 import pandas as pd
 import json
+import os
 from pathlib import Path
 import psutil
 from sklearn.model_selection import ParameterGrid
@@ -60,7 +61,9 @@ def load_model_data(model_name, subjects, selected_channels=None, split_strategy
     # Handle DataLoader path configuration based on environment
     current_dir = Path(__file__).parent.absolute()
     
-    if '/content/' in str(current_dir):  # Running in Colab
+    if os.environ.get('EYE_EEG_DATA_DIR'):  # Explicit override
+        DataLoader.data_path = Path(os.environ['EYE_EEG_DATA_DIR'])
+    elif '/content/' in str(current_dir):  # Running in Colab
         # For Colab, set the data path to drive location
         DataLoader.data_path = Path('/content/drive/MyDrive/eye-eeg/data')
     # For local, use default paths (no change needed)

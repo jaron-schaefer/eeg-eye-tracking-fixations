@@ -1,3 +1,6 @@
+# Adapted from CBraMod (Wang et al., ICLR 2025), https://github.com/wjq-learning/CBraMod
+# Original code: MIT License, Copyright (c) the CBraMod authors.
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
